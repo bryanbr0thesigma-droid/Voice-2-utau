@@ -153,3 +153,19 @@ def test_unit_weights_and_coverage():
     assert cov["recorded_units"] == 4 and 0 < cov["speech_covered_by_recordings"] < cov["speech_covered_total"] <= 1
     assert cov["most_needed_missing"][0]["key"] == top[3]          # the highest-share non-recorded unit
     assert "speech_covered_total" not in pipeline._coverage({}, __import__("voice2utau.morae").morae.MORAE, profiles.get("ja"))
+
+
+def test_er_and_ow_use_calibrated_confidence_thresholds():
+    from voice2utau import extract
+    assert english.min_conf_for(english.UNITS["cv_d_er"], 0.7) == 0.5
+    assert english.min_conf_for(english.UNITS["vc_ow_n"], 0.7) == 0.6
+    assert english.min_conf_for(english.UNITS["cv_k_ae"], 0.7) == 0.7
+    assert english.min_conf_for(english.UNITS["cv_k_ae"], 0.45) == 0.45        # never raises a lower default
+
+    def cand(key, conf):
+        return extract.Candidate(english.UNITS[key], "s", 0.0, 0.3, 0.1, conf, 0.2, 1.0 + conf)
+    cs = [cand("cv_d_er", 0.55), cand("cv_k_ae", 0.55), cand("vc_ow_n", 0.62), cand("cv_k_ae", 0.8)]
+    plain = extract.rank_candidates(cs, 0.7)
+    tuned = extract.rank_candidates(cs, 0.7, conf_for=lambda m: english.min_conf_for(m, 0.7))
+    assert set(plain) == {"cv_k_ae"} and set(tuned) == {"cv_k_ae", "cv_d_er", "vc_ow_n"}
+    assert [c.conf for c in tuned["cv_k_ae"]] == [0.8]                          # ae still needs >= 0.7

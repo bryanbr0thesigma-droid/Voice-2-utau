@@ -142,7 +142,8 @@ def run(upload: Path, work: Path, out_dir: Path, opt: Options,
     P("select", 0.0, "Picking the cleanest sample for each mora…")
     wavs = {s.id: s.wav44 for s in sources}
     validator = Validator({s.id: s.wav16 for s in sources}) if validate else None
-    options = collect_options(cands, wavs, min_conf, top_k=12, validator=validator)
+    conf_for = (lambda m: prof.min_conf_for(m, min_conf)) if prof.min_conf_for else None
+    options = collect_options(cands, wavs, min_conf, top_k=12, validator=validator, conf_for=conf_for)
     name_of = {s.id: s.original for s in sources}
     upload_tag = file_sha1(upload)[:10]
     for opts in options.values():

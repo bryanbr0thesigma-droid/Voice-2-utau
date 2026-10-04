@@ -223,3 +223,15 @@ def unit_weights() -> dict[str, float]:
     """Share of everyday English speech each unit accounts for (sums to 1). See tools/build_unit_freq.py."""
     p = Path(__file__).parent / "data" / "en_unit_freq.json"
     return json.loads(p.read_text(encoding="utf-8"))["units"] if p.exists() else {}
+
+
+# The recogniser's confidence is miscalibrated for two sounds: /ɚ/ is emitted with low probability (mean
+# 0.26) and /oʊ/ never exceeds ~0.65, so the general 0.7 cut-off silently drops every `er` and `ow` unit
+# (7.4 % + 3.6 % of everyday speech). Measured on 12 min of LJSpeech with transcripts: er at 0.5-0.7 is
+# 90 % correct (vs 96 % above 0.7); ow at 0.6-0.65 is 94 % correct. Other vowels are clearly *worse* in
+# that band (aa 0.48, eh 0.46, iy 0.43, uh 0.08), so only these two are relaxed.
+CONF_OVERRIDES = {"er": 0.5, "ow": 0.6}
+
+
+def min_conf_for(m: Mora, default: float) -> float:
+    return min(default, CONF_OVERRIDES.get(m.vowel, default))

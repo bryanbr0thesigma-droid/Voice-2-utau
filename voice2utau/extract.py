@@ -177,11 +177,12 @@ def acoustic_ok(clip: Clip, sr: int = audio.SR_BANK) -> float:
     return 1.0
 
 
-def rank_candidates(cands: list[Candidate], min_conf: float = 0.45, validator=None) -> dict[str, list[Candidate]]:
+def rank_candidates(cands: list[Candidate], min_conf: float = 0.45, validator=None,
+                    conf_for=None) -> dict[str, list[Candidate]]:
     """Per mora, the usable candidates ordered best-first."""
     by_key: dict[str, list[Candidate]] = {}
     for c in cands:
-        if c.score <= 0 or c.conf < min_conf:
+        if c.score <= 0 or c.conf < (conf_for(c.mora) if conf_for else min_conf):
             continue
         if validator is not None and not validator.accept(c):
             continue
@@ -205,12 +206,12 @@ class Option:
 
 
 def collect_options(cands: list[Candidate], wavs: dict[str, Path], min_conf: float = 0.45,
-                    top_k: int = 6, validator=None) -> dict[str, list[Option]]:
+                    top_k: int = 6, validator=None, conf_for=None) -> dict[str, list[Option]]:
     """Cut the best `top_k` candidates of every unit out of the sources."""
     if validator is not None:
         validator.annotate(cands)
     options: dict[str, list[Option]] = {}
-    for key, cs in rank_candidates(cands, min_conf, validator).items():
+    for key, cs in rank_candidates(cands, min_conf, validator, conf_for).items():
         for c in cs[:top_k]:
             clip = cut_clip(c, wavs[c.src])
             if clip is None:
