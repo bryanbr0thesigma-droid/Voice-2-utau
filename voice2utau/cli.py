@@ -11,7 +11,9 @@ from . import pipeline, profiles
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="voice2utau", description="Turn a voice recording into a UTAU voicebank.")
-    ap.add_argument("input", type=Path, help="a .zip of voice lines, or one (long) audio file such as .mp3")
+    ap.add_argument("input", type=Path, nargs="?",
+                    help="a .zip of voice lines, or one (long) audio file such as .mp3. Omit it together with --state "
+                         "to rebuild the bank from the saved state (e.g. to add gap filling) without re-listening")
     ap.add_argument("--language", choices=sorted(profiles.PROFILES), default="ja",
                     help="voicebank type: ja = hiragana CV, en = English ARPAbet CVVC (default: ja)")
     ap.add_argument("--source-lang", choices=["en", "de", "mixed"], default="en",
@@ -41,6 +43,8 @@ def main(argv: list[str] | None = None) -> int:
                          "voices stay the same across zips.")
     ap.add_argument("--work", type=Path, help="working directory (default: temporary)")
     a = ap.parse_args(argv)
+    if a.input is None and not a.state:
+        ap.error("give an input file, or --state to rebuild from a saved state")
 
     def progress(stage: str, frac: float, msg: str) -> None:
         print(f"\r[{stage:9s}] {frac * 100:5.1f}%  {msg:70s}", end="", file=sys.stderr, flush=True)

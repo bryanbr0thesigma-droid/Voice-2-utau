@@ -81,7 +81,7 @@ def _speech_f0(sources: list[Source], limit_s: float = 120.0) -> float | None:
     return float(np.median(vals)) if vals else None
 
 
-def run(upload: Path, work: Path, out_dir: Path, opt: Options,
+def run(upload: Path | None, work: Path, out_dir: Path, opt: Options,
         progress: Progress | None = None) -> Result:
     t0 = time.time()
     P = progress or (lambda stage, frac, msg: None)
@@ -111,61 +111,76 @@ def run(upload: Path, work: Path, out_dir: Path, opt: Options,
         raise PipelineError("gap fill 'rvc' needs an RVC model (.pth). Upload one, choose 'template' "
                             "or 'none', or configure V2U_RVC_TRAIN_COMMAND to train one automatically.")
 
-    # 1. ingest ------------------------------------------------------------------
-    P("ingest", 0.0, "Decoding audio…")
-    try:
-        sources = prepare_sources(upload, work / "audio", lambda f: P("ingest", f, "Decoding audio…"),
-                                  opt.source_lang)
-    except IngestError as e:
-        raise PipelineError(str(e)) from e
-    speaker_info = None
-    if opt.speaker != "all" and len(sources) >= speakers.MIN_FILES:
-        sources, speaker_info = _select_speaker(sources, opt, out_dir, P)
-    lang_of = {s.id: s.lang for s in sources}
-    total_s = sum(s.seconds for s in sources)
-    P("ingest", 1.0, f"{len(sources)} file(s), {total_s / 60:.1f} min of audio")
-
-    # 2. recognise phonemes ------------------------------------------------------
-    P("recognise", 0.0, "Loading phoneme model (first run downloads ~1.2 GB)…")
-    rec = get_recognizer()
-    cands = []
-    n_phones = 0
-    for si, s in enumerate(sources):
-        phones = rec.recognise_file(
-            s.wav16, lambda f, si=si: P("recognise", (si + f) / len(sources),
-                                        f"Listening… file {si + 1}/{len(sources)}"))
-        n_phones += len(phones)
-        cands += prof.build_candidates(phones, s.id, s.lang)
-    P("recognise", 1.0, f"{n_phones} phonemes, {len(cands)} mora candidates")
-
-    # 3. choose the best recording of every mora ---------------------------------
-    P("select", 0.0, "Picking the cleanest sample for each mora…")
-    wavs = {s.id: s.wav44 for s in sources}
-    validator = Validator({s.id: s.wav16 for s in sources}) if validate else None
-    conf_for = (lambda m: prof.min_conf_for(m, min_conf)) if prof.min_conf_for else None
-    options = collect_options(cands, wavs, min_conf, top_k=12, validator=validator, conf_for=conf_for)
-    name_of = {s.id: s.original for s in sources}
-    upload_tag = file_sha1(upload)[:10]
-    for opts in options.values():
-        for o in opts:
-            o.clip.meta["lang"] = lang_of.get(o.clip.origin)
-            o.clip.meta["file"] = name_of.get(o.clip.origin)
-            o.clip.origin = f"{upload_tag}:{o.clip.origin}"
-    corpus_info = None
-    if opt.state_dir:
+    if upload is None:
+        # Rebuild from the saved state: no audio is read or recognised, only gap filling and writing change.
+        if not opt.state_dir:
+            raise PipelineError("rebuilding without an upload needs a state directory (--state)")
         try:
             corpus = Corpus.load(opt.state_dir, prof.code, units)
         except CorpusError as e:
             raise PipelineError(str(e)) from e
-        sha = file_sha1(upload)
-        if corpus.has_upload(sha):
-            warnings.append("this exact upload was already added to the state directory; it was not added twice")
-        else:
-            corpus.add(options, {"sha1": sha, "name": upload.name, "files": len(sources),
-                                 "seconds": round(total_s, 1), "lang": opt.source_lang})
-            corpus.save()
-        options = corpus.options
-        corpus_info = corpus.stats()
+        if not corpus.uploads:
+            raise PipelineError(f"{opt.state_dir} holds no clips yet; run once with an upload first")
+        sources, lang_of, speaker_info = [], {}, None
+        options, corpus_info = corpus.options, corpus.stats()
+        total_s = corpus_info["seconds"]
+        P("select", 1.0, f"Rebuilding from {corpus_info['uploads']} saved upload(s), {corpus_info['files']} files")
+    else:
+        # 1. ingest ------------------------------------------------------------------
+        P("ingest", 0.0, "Decoding audio…")
+        try:
+            sources = prepare_sources(upload, work / "audio", lambda f: P("ingest", f, "Decoding audio…"),
+                                      opt.source_lang)
+        except IngestError as e:
+            raise PipelineError(str(e)) from e
+        speaker_info = None
+        if opt.speaker != "all" and len(sources) >= speakers.MIN_FILES:
+            sources, speaker_info = _select_speaker(sources, opt, out_dir, P)
+        lang_of = {s.id: s.lang for s in sources}
+        total_s = sum(s.seconds for s in sources)
+        P("ingest", 1.0, f"{len(sources)} file(s), {total_s / 60:.1f} min of audio")
+
+        # 2. recognise phonemes ------------------------------------------------------
+        P("recognise", 0.0, "Loading phoneme model (first run downloads ~1.2 GB)…")
+        rec = get_recognizer()
+        cands = []
+        n_phones = 0
+        for si, s in enumerate(sources):
+            phones = rec.recognise_file(
+                s.wav16, lambda f, si=si: P("recognise", (si + f) / len(sources),
+                                            f"Listening… file {si + 1}/{len(sources)}"))
+            n_phones += len(phones)
+            cands += prof.build_candidates(phones, s.id, s.lang)
+        P("recognise", 1.0, f"{n_phones} phonemes, {len(cands)} mora candidates")
+
+        # 3. choose the best recording of every mora ---------------------------------
+        P("select", 0.0, "Picking the cleanest sample for each mora…")
+        wavs = {s.id: s.wav44 for s in sources}
+        validator = Validator({s.id: s.wav16 for s in sources}) if validate else None
+        conf_for = (lambda m: prof.min_conf_for(m, min_conf)) if prof.min_conf_for else None
+        options = collect_options(cands, wavs, min_conf, top_k=12, validator=validator, conf_for=conf_for)
+        name_of = {s.id: s.original for s in sources}
+        upload_tag = file_sha1(upload)[:10]
+        for opts in options.values():
+            for o in opts:
+                o.clip.meta["lang"] = lang_of.get(o.clip.origin)
+                o.clip.meta["file"] = name_of.get(o.clip.origin)
+                o.clip.origin = f"{upload_tag}:{o.clip.origin}"
+        corpus_info = None
+        if opt.state_dir:
+            try:
+                corpus = Corpus.load(opt.state_dir, prof.code, units)
+            except CorpusError as e:
+                raise PipelineError(str(e)) from e
+            sha = file_sha1(upload)
+            if corpus.has_upload(sha):
+                warnings.append("this exact upload was already added to the state directory; it was not added twice")
+            else:
+                corpus.add(options, {"sha1": sha, "name": upload.name, "files": len(sources),
+                                     "seconds": round(total_s, 1), "lang": opt.source_lang})
+                corpus.save()
+            options = corpus.options
+            corpus_info = corpus.stats()
     clips: dict[str, Clip] = choose(options)
     recorded = len(clips)
     P("select", 1.0, f"{recorded}/{len(units)} units found in the recording")
