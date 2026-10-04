@@ -18,6 +18,7 @@ class Profile:
     description: str
     default_min_conf: float = 0.45   # recogniser confidence needed to keep a candidate
     default_validate: bool = True     # acoustic cross-check of labels (see validate.py)
+    native_lang: str | None = None    # recordings in another language are fallbacks (None = no notion of one)
 
 
 PROFILES: dict[str, Profile] = {
@@ -29,7 +30,7 @@ PROFILES: dict[str, Profile] = {
                   "CV 'k ae', VC 'ae t' and initial-vowel '- ae' units",
                   # measured on real English speech: confidence is the better filter here;
                   # the MFCC cross-check removed half the units for +2 points of precision
-                  default_min_conf=0.7, default_validate=False),
+                  default_min_conf=0.7, default_validate=False, native_lang="en"),
 }
 
 

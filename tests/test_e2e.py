@@ -87,3 +87,36 @@ def test_english_bank_fills_all_675_units(en_recording, tmp_path):
     assert any(l.startswith("cv_k_ae.wav=k ae,0,") for l in lines)
     assert any(l.startswith("vc_ae_t.wav=ae t,0,") for l in lines)
     assert "English CVVC" in (res.bank_dir / "readme.txt").read_text()
+
+
+DE_SENTENCES = ["Guten Morgen, wie geht es dir heute", "Ich möchte gerne ein Glas Wasser trinken",
+                "Das Wetter ist heute sehr schön", "Wir gehen zusammen in die Stadt"]
+
+
+def test_bilingual_zip_converts_german_fallback_through_rvc(tmp_path):
+    import zipfile
+    from voice2utau import english
+    en_dir = tmp_path / "zip"
+    (en_dir / "en").mkdir(parents=True)
+    (en_dir / "de").mkdir()
+    for i, (voice, texts, folder) in enumerate([("en-us+f3", EN_SENTENCES * 2, "en"), ("de+f3", DE_SENTENCES * 3, "de")]):
+        for j, t in enumerate(texts):
+            subprocess.run(["espeak-ng", "-v", voice, "-s", "150", "-w", str(en_dir / folder / f"{j:02d}.wav"), t], check=True)
+    zp = tmp_path / "voice.zip"
+    with zipfile.ZipFile(zp, "w") as z:
+        for p in sorted(en_dir.rglob("*.wav")):
+            z.write(p, p.relative_to(en_dir))
+    fake = Path(__file__).parent / "fake_rvc.py"
+    model = tmp_path / "m.pth"
+    model.write_bytes(b"x")
+    opt = pipeline.Options(name="BI", language="en", rvc_model=model,
+                           rvc_command=f"{sys.executable} {fake} {{input}} {{output}} {{transpose}}")
+    res = pipeline.run(zp, tmp_path / "w", tmp_path / "o", opt)
+    r = res.report
+    assert {s["lang"] for s in r["sources"]} == {"en", "de"}
+    de = [s for s in r["samples"] if s["lang"] == "de"]
+    assert de, "German should fill at least one unit the English lines lack"
+    assert all(s["source"] == "rvc" for s in de)                      # converted to the main voice
+    assert r["counts"]["fallback_converted"] == len(de)
+    assert any("converted with your RVC model" in w for w in r["warnings"])
+    assert r["counts"]["missing"] == 0 and len(english.UNITS) == 675

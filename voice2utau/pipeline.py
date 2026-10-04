@@ -114,6 +114,7 @@ def run(upload: Path, work: Path, out_dir: Path, opt: Options,
                                   opt.source_lang)
     except IngestError as e:
         raise PipelineError(str(e)) from e
+    lang_of = {s.id: s.lang for s in sources}
     total_s = sum(s.seconds for s in sources)
     P("ingest", 1.0, f"{len(sources)} file(s), {total_s / 60:.1f} min of audio")
 
@@ -137,7 +138,12 @@ def run(upload: Path, work: Path, out_dir: Path, opt: Options,
     clips: dict[str, Clip] = select_best(cands, wavs, min_conf, validator=validator)
     recorded = len(clips)
     P("select", 1.0, f"{recorded}/{len(units)} units found in the recording")
-    target_f0 = float(np.median([c.f0 for c in clips.values() if c.f0])) if any(c.f0 for c in clips.values()) else None
+    native = prof.native_lang
+
+    def is_fallback(c: Clip) -> bool:
+        return bool(native) and c.source == "recorded" and lang_of.get(c.origin, native) != native
+    ref_f0 = [c.f0 for c in clips.values() if c.f0 and not is_fallback(c)] or [c.f0 for c in clips.values() if c.f0]
+    target_f0 = float(np.median(ref_f0)) if ref_f0 else None
     if target_f0 is None:
         target_f0 = _speech_f0(sources)
     missing = [k for k in units if k not in clips]
@@ -199,6 +205,28 @@ def run(upload: Path, work: Path, out_dir: Path, opt: Options,
     elif missing:
         P("fill", 1.0, "Gap fill skipped")
 
+    # 4b. Clips from a fallback language (e.g. German) come from a different performer. Run them
+    #     through the same RVC model so the whole bank shares one timbre.
+    fallback = [c for c in clips.values() if is_fallback(c)]
+    converted_fallback = 0
+    if fallback and backend is not None:
+        f0s = [c.f0 for c in fallback if c.f0]
+        tr = int(np.clip(round(12 * np.log2(target_f0 / np.median(f0s))), -12, 12)) if target_f0 and f0s else 0
+        P("fill", 1.0, f"Converting {len(fallback)} fallback-language clips with RVC…")
+        try:
+            conv, w = rvc.convert_clips(fallback, backend, tr)
+        except rvc.RVCError as e:
+            raise PipelineError(str(e)) from e
+        for c in conv:
+            clips[c.mora.key] = c
+        converted_fallback = sum(c.source == "rvc" for c in conv)
+        warnings += w
+        warnings.append(f"{converted_fallback} clip(s) from {', '.join(sorted({lang_of[c.origin] for c in fallback}))} "
+                        "lines were converted with your RVC model so they match the main voice.")
+    elif fallback:
+        warnings.append(f"{len(fallback)} clip(s) come from fallback-language lines (a different voice actor) and were NOT "
+                        "converted because no RVC model was used. Expect a timbre mismatch on those (dotted cells).")
+
     if not clips:
         raise PipelineError("No usable samples were produced. The recording may be too short, too noisy, "
                             "or silent; try a longer/cleaner recording or enable template gap fill.")
@@ -222,7 +250,6 @@ def run(upload: Path, work: Path, out_dir: Path, opt: Options,
 
     # 6. write -------------------------------------------------------------------
     P("write", 0.0, "Writing voicebank…")
-    lang_of = {s.id: s.lang for s in sources}
     report = {
         "name": opt.name,
         "language": prof.code,
@@ -231,6 +258,7 @@ def run(upload: Path, work: Path, out_dir: Path, opt: Options,
                    "recorded": sum(c.source == "recorded" for c in clips.values()),
                    "rvc": sum(c.source == "rvc" for c in clips.values()),
                    "template_raw": sum(c.source == "template" for c in clips.values()),
+                   "fallback_converted": converted_fallback,
                    "missing": len(units) - len(clips)},
         "gap_fill_mode": mode,
         "settings": {"min_confidence": min_conf, "cross_check": validate},
@@ -240,7 +268,7 @@ def run(upload: Path, work: Path, out_dir: Path, opt: Options,
         "samples": [{"key": k, "alias": c.mora.kana, "source": c.source, "confidence": round(c.conf, 2),
                      "f0_hz": round(c.f0, 1) if c.f0 else None,
                      "duration_ms": round(len(c.audio) / audio.SR_BANK * 1000),
-                     "lang": lang_of.get(c.origin, opt.source_lang) if c.source == "recorded" else None}
+                     "lang": lang_of.get(c.origin)}
                     for k, c in clips.items()],
         "missing": [{"key": k, "alias": units[k].kana} for k in units if k not in clips],
         "warnings": warnings,
