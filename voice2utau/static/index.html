@@ -65,6 +65,7 @@
           font: inherit; font-size: .95rem; cursor: pointer; text-align: center; }
   .cell[data-src=recorded] { border-color: var(--rec); } .cell[data-src=rvc] { border-color: var(--rvc); }
   .cell[data-src=template] { border-color: var(--tpl); } .cell[data-src=missing] { color: var(--miss); border-style: dashed; border-color: var(--miss); cursor: default; }
+  .grid.en .cell { min-width: 56px; font-size: .85rem; padding: 4px 3px; }
   .cell:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   .cell.playing { background: color-mix(in srgb, var(--accent) 20%, transparent); }
   ul.warnings { margin: 6px 0 0; padding-left: 20px; }
@@ -74,7 +75,7 @@
 <body>
 <main>
   <h1>Voice → UTAU</h1>
-  <p class="sub">Upload a zip of voice lines or one long recording. Morae found in the recording are cut out as they are;
+  <p class="sub">Upload a zip of voice lines or one long recording. Sounds found in the recording are cut out as they are;
   missing ones come from a template and are converted by your RVC model.</p>
 
   <form id="form" class="card" autocomplete="off">
@@ -86,6 +87,9 @@
     <input id="file" type="file" class="hidden" accept=".zip,audio/*,video/mp4,video/webm,.mkv">
     <label for="name">Voicebank name</label>
     <input id="name" type="text" value="MyVoice" maxlength="60">
+    <label for="language">Voicebank type</label>
+    <select id="language"></select>
+    <p class="hint" id="langHint"></p>
 
     <h2 style="margin-top:22px">2 · Fill the gaps with RVC</h2>
     <div class="row">
@@ -113,7 +117,12 @@
       <input id="template" type="file" accept=".zip">
       <p class="hint">Default template: generated locally with espeak-ng. If you use someone else's voicebank, check its terms of use first.</p>
       <label><input id="flatten" type="checkbox" checked> Flatten pitch of all samples (recommended for UTAU)</label>
-      <label><input id="validate" type="checkbox" checked> Cross-check recognised sounds against the speaker's other recordings</label>
+      <label for="validate">Cross-check recognised sounds against the speaker's other recordings</label>
+      <select id="validate">
+        <option value="auto">Automatic (on for Japanese, off for English – measured to work better)</option>
+        <option value="on">On – stricter, finds fewer sounds</option>
+        <option value="off">Off</option>
+      </select>
     </details>
 
     <div style="margin-top:18px"><button id="go" class="primary" type="submit" disabled>Make voicebank</button></div>
@@ -150,6 +159,9 @@ fetch("/api/config").then(r => r.json()).then(c => {
   bits.push(c.rvc_available ? `RVC engine: <b>${c.rvc_engine}</b> ✓` :
     "<b>No RVC engine installed</b> – install <code>rvc-python</code> or set <code>V2U_RVC_COMMAND</code> (see README). Without one, missing morae are left out.");
   $("engine").innerHTML = bits.join(" · ");
+  $("language").innerHTML = c.languages.map(l => `<option value="${l.code}">${esc(l.name)}</option>`).join("");
+  const hint = () => { $("langHint").textContent = c.languages.find(l => l.code === $("language").value).description; };
+  $("language").onchange = hint; hint();
 });
 
 const drop = $("drop");
@@ -172,9 +184,10 @@ $("form").onsubmit = async e => {
   const fd = new FormData();
   fd.append("file", file);
   fd.append("name", $("name").value);
+  fd.append("language", $("language").value);
   fd.append("gap_fill", $("gapfill").value);
   fd.append("flatten_pitch", $("flatten").checked);
-  fd.append("cross_check", $("validate").checked);
+  fd.append("cross_check", $("validate").value);
   for (const [id, field] of [["model","rvc_model"],["index","rvc_index"],["template","template"]])
     if ($(id).files[0]) fd.append(field, $(id).files[0]);
   $("go").disabled = true; $("result").classList.add("hidden"); $("err").classList.add("hidden");
@@ -234,12 +247,14 @@ function showResult(j) {
   $("warnings").innerHTML = (r.warnings || []).map(w => `<div class="notice warn">${esc(w)}</div>`).join("");
   const src = Object.fromEntries(r.samples.map(s => [s.key, s.source]));
   const rows = {};
-  for (const m of cfg.morae) (rows[m.cls] ||= []).push(m);
+  const lang = r.language || "ja";
+  $("grid").className = "grid " + lang;
+  for (const m of cfg.units[lang]) (rows[m.group] ||= []).push(m);
   $("grid").innerHTML = Object.values(rows).map(ms =>
     `<div class="grow">${ms.map(m => {
       const s = src[m.key] || "missing";
       return `<button type="button" class="cell" data-src="${s}" data-key="${m.key}" ${s === "missing" ? "disabled" : ""}
-              title="${m.key} · ${s}">${m.kana}</button>`; }).join("")}</div>`).join("");
+              title="${m.key} · ${s}">${esc(m.alias)}</button>`; }).join("")}</div>`).join("");
   $("grid").onclick = e => {
     const b = e.target.closest(".cell"); if (!b || b.disabled) return;
     if (audioEl) audioEl.pause();

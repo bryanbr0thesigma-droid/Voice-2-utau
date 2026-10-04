@@ -8,9 +8,11 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class Mora:
     key: str      # romaji, also the wav file name stem
-    kana: str     # hiragana alias written to oto.ini
+    kana: str     # alias written to oto.ini (hiragana for Japanese, ARPAbet pair for English)
     cls: str      # consonant class ('' for plain vowels)
     vowel: str    # a i u e o ('' for ん)
+    kind: str = "CV"    # CV | VC | V   (VC only exists in the English bank)
+    lang: str = "ja"
 
 
 # (consonant class, [(vowel, kana), ...])

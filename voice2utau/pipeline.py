@@ -10,10 +10,9 @@ from typing import Callable
 
 import numpy as np
 
-from . import audio, bank, rvc
-from .extract import Clip, build_candidates, select_best
+from . import audio, bank, profiles, rvc
+from .extract import Clip, select_best
 from .ingest import Source, prepare_sources
-from .morae import MORAE
 from .validate import Validator
 from .templates import EspeakTemplate, TemplateError, VoicebankTemplate
 
@@ -28,14 +27,15 @@ class PipelineError(RuntimeError):
 @dataclass
 class Options:
     name: str = "MyVoice"
+    language: str = "ja"             # ja = hiragana CV bank, en = English ARPAbet CVVC bank
     gap_fill: str = "auto"            # auto | rvc | template | none
     rvc_model: Path | None = None
     rvc_index: Path | None = None
     rvc_command: str | None = None
     template: Path | None = None      # custom UTAU bank (.zip / folder); default = espeak-ng
     flatten_pitch: bool = True
-    min_conf: float = 0.45
-    validate: bool = True             # cross-check labels against the speaker's other recordings
+    min_conf: float | None = None     # None = language default
+    validate: bool | None = None      # cross-check labels against the speaker's other recordings; None = language default
 
 
 @dataclass
@@ -83,6 +83,13 @@ def run(upload: Path, work: Path, out_dir: Path, opt: Options,
     warnings: list[str] = []
     if opt.gap_fill not in GAP_FILL_MODES:
         raise PipelineError(f"gap_fill must be one of {GAP_FILL_MODES}")
+    try:
+        prof = profiles.get(opt.language)
+    except ValueError as e:
+        raise PipelineError(str(e)) from e
+    units = prof.units
+    min_conf = prof.default_min_conf if opt.min_conf is None else opt.min_conf
+    validate = prof.default_validate if opt.validate is None else opt.validate
     work.mkdir(parents=True, exist_ok=True)
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -115,20 +122,20 @@ def run(upload: Path, work: Path, out_dir: Path, opt: Options,
             s.wav16, lambda f, si=si: P("recognise", (si + f) / len(sources),
                                         f"Listening… file {si + 1}/{len(sources)}"))
         n_phones += len(phones)
-        cands += build_candidates(phones, s.id)
+        cands += prof.build_candidates(phones, s.id)
     P("recognise", 1.0, f"{n_phones} phonemes, {len(cands)} mora candidates")
 
     # 3. choose the best recording of every mora ---------------------------------
     P("select", 0.0, "Picking the cleanest sample for each mora…")
     wavs = {s.id: s.wav44 for s in sources}
-    validator = Validator({s.id: s.wav16 for s in sources}) if opt.validate else None
-    clips: dict[str, Clip] = select_best(cands, wavs, opt.min_conf, validator=validator)
+    validator = Validator({s.id: s.wav16 for s in sources}) if validate else None
+    clips: dict[str, Clip] = select_best(cands, wavs, min_conf, validator=validator)
     recorded = len(clips)
-    P("select", 1.0, f"{recorded}/{len(MORAE)} morae found in the recording")
+    P("select", 1.0, f"{recorded}/{len(units)} units found in the recording")
     target_f0 = float(np.median([c.f0 for c in clips.values() if c.f0])) if any(c.f0 for c in clips.values()) else None
     if target_f0 is None:
         target_f0 = _speech_f0(sources)
-    missing = [k for k in MORAE if k not in clips]
+    missing = [k for k in units if k not in clips]
 
     # 4. fill the gaps -----------------------------------------------------------
     template_info = None
@@ -145,18 +152,20 @@ def run(upload: Path, work: Path, out_dir: Path, opt: Options,
     if missing and mode != "none":
         P("fill", 0.0, f"Building template for {len(missing)} missing morae…")
         try:
-            tpl = VoicebankTemplate(opt.template, work) if opt.template else EspeakTemplate(target_f0)
+            tpl = (VoicebankTemplate(opt.template, work, units=units) if opt.template
+                   else EspeakTemplate(target_f0, lang=prof.code))
         except TemplateError as e:
             raise PipelineError(str(e)) from e
         template_info = {"name": tpl.name, "license": tpl.license}
         filled: list[Clip] = []
         for k in missing:
-            c = tpl.get(MORAE[k])
+            c = tpl.get(units[k])
             if c is not None:
                 filled.append(c)
         skipped = [k for k in missing if k not in {c.mora.key for c in filled}]
         if skipped:
-            warnings.append("template has no usable sample for: " + ", ".join(MORAE[k].kana for k in skipped))
+            warnings.append("template has no usable sample for: " + ", ".join(units[k].kana for k in skipped[:40])
+                            + (f" … (+{len(skipped) - 40} more)" if len(skipped) > 40 else ""))
         if mode in ("rvc", "auto"):
             if backend is None:        # auto-train path
                 P("fill", 0.05, "Training an RVC model on your voice…")
@@ -210,25 +219,27 @@ def run(upload: Path, work: Path, out_dir: Path, opt: Options,
     P("write", 0.0, "Writing voicebank…")
     report = {
         "name": opt.name,
+        "language": prof.code,
         "bank_f0_hz": round(bank_f0, 1) if bank_f0 else None,
-        "counts": {"total_target": len(MORAE),
+        "counts": {"total_target": len(units),
                    "recorded": sum(c.source == "recorded" for c in clips.values()),
                    "rvc": sum(c.source == "rvc" for c in clips.values()),
                    "template_raw": sum(c.source == "template" for c in clips.values()),
-                   "missing": len(MORAE) - len(clips)},
+                   "missing": len(units) - len(clips)},
         "gap_fill_mode": mode,
+        "settings": {"min_confidence": min_conf, "cross_check": validate},
         "rvc_transpose": transpose if mode in ("rvc", "auto") and any(c.source == "rvc" for c in clips.values()) else None,
         "template": template_info,
         "sources": [{"file": s.original, "seconds": round(s.seconds, 1)} for s in sources],
-        "samples": [{"key": k, "kana": c.mora.kana, "source": c.source, "confidence": round(c.conf, 2),
+        "samples": [{"key": k, "alias": c.mora.kana, "source": c.source, "confidence": round(c.conf, 2),
                      "f0_hz": round(c.f0, 1) if c.f0 else None,
                      "duration_ms": round(len(c.audio) / audio.SR_BANK * 1000)}
                     for k, c in clips.items()],
-        "missing": [{"key": k, "kana": MORAE[k].kana} for k in MORAE if k not in clips],
+        "missing": [{"key": k, "alias": units[k].kana} for k in units if k not in clips],
         "warnings": warnings,
         "elapsed_s": round(time.time() - t0, 1),
     }
-    root = bank.write_bank(clips, out_dir, opt.name, report)
+    root = bank.write_bank(clips, out_dir, opt.name, report, units)
     zpath = bank.zip_bank(root, out_dir / f"{root.name}_utau.zip")
 
     if report["counts"]["missing"] and backend is None and mode != "template":

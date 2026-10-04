@@ -56,6 +56,8 @@ def test_full_job_cycle(client):
 @pytest.mark.parametrize("files,data,code", [
     ({"file": ("evil.exe", b"x")}, {}, 400),
     ({"file": ("v.zip", b"x")}, {"gap_fill": "bogus"}, 400),
+    ({"file": ("v.zip", b"x")}, {"language": "fr"}, 400),
+    ({"file": ("v.zip", b"x")}, {"cross_check": "maybe"}, 400),
     ({"file": ("v.zip", b"x"), "rvc_model": ("m.bin", b"x")}, {}, 400),
     ({"file": ("v.zip", b"x"), "template": ("t.rar", b"x")}, {}, 400),
 ])
@@ -79,6 +81,20 @@ def test_job_id_traversal_and_unknown(client):
     assert client.get("/api/jobs/" + "0" * 32).status_code == 404
 
 
+def test_language_and_cross_check_reach_pipeline(client, monkeypatch):
+    seen = {}
+    real = pipeline.run
+
+    def spy(upload, work, out, opt, progress=None):
+        seen["lang"], seen["validate"] = opt.language, opt.validate
+        return real(upload, work, out, opt, progress)
+    monkeypatch.setattr(pipeline, "run", spy)
+    jid = client.post("/api/jobs", files={"file": ("v.mp3", b"x")},
+                      data={"language": "en", "cross_check": "off"}).json()["id"]
+    wait(client, jid)
+    assert seen == {"lang": "en", "validate": False}
+
+
 def test_pipeline_error_reported(client, monkeypatch):
     def boom(*a, **k):
         raise pipeline.PipelineError("needs a model")
@@ -91,4 +107,6 @@ def test_pipeline_error_reported(client, monkeypatch):
 def test_index_and_config(client):
     assert "Voice" in client.get("/").text
     c = client.get("/api/config").json()
-    assert len(c["morae"]) == 101 and "rvc_available" in c
+    assert len(c["units"]["ja"]) == 101 and len(c["units"]["en"]) == 675 and "rvc_available" in c
+    assert {l["code"] for l in c["languages"]} == {"ja", "en"}
+    assert c["units"]["en"][0] == {"key": "cv_b_aa", "alias": "b aa", "group": "CV · b"}

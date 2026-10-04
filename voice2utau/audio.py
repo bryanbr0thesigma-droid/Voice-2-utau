@@ -125,8 +125,10 @@ def f0_track(x: np.ndarray, sr: int, fmin: float = 60.0, fmax: float = 700.0) ->
     """Return (times, f0) with 0 for unvoiced frames."""
     import parselmouth
     snd = parselmouth.Sound(x.astype(np.float64), sampling_frequency=sr)
+    # octave_cost 0.1 (Praat default 0.01): on short sub-regions the default sometimes locks onto
+    # the sub-harmonic (e.g. 115 Hz for a 230 Hz voice); measured 0 errors vs 3-10 % before.
     pitch = snd.to_pitch_ac(time_step=0.01, pitch_floor=fmin, pitch_ceiling=fmax,
-                            voicing_threshold=0.5)
+                            voicing_threshold=0.5, octave_cost=0.1)
     f0 = pitch.selected_array["frequency"].copy()
     t = pitch.xs()
     return t, f0

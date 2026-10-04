@@ -6,12 +6,14 @@ import sys
 import tempfile
 from pathlib import Path
 
-from . import pipeline
+from . import pipeline, profiles
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="voice2utau", description="Turn a voice recording into a UTAU voicebank.")
     ap.add_argument("input", type=Path, help="a .zip of voice lines, or one (long) audio file such as .mp3")
+    ap.add_argument("--language", choices=sorted(profiles.PROFILES), default="ja",
+                    help="voicebank type: ja = hiragana CV, en = English ARPAbet CVVC (default: ja)")
     ap.add_argument("--name", default="MyVoice", help="voicebank name")
     ap.add_argument("-o", "--out", type=Path, default=Path("output"), help="output directory")
     ap.add_argument("--gap-fill", choices=pipeline.GAP_FILL_MODES, default="auto",
@@ -22,8 +24,10 @@ def main(argv: list[str] | None = None) -> int:
                     "'python infer.py -i {input} -o {output} -m {model} -k {transpose}'")
     ap.add_argument("--template", type=Path, help="UTAU voicebank (.zip/folder) to use as template instead of espeak-ng")
     ap.add_argument("--no-flatten", action="store_true", help="do not monotonise sample pitch")
-    ap.add_argument("--no-validate", action="store_true", help="skip acoustic cross-validation of phoneme labels")
-    ap.add_argument("--min-conf", type=float, default=0.45, help="minimum phoneme confidence (0-1)")
+    ap.add_argument("--cross-check", choices=["auto", "on", "off"], default="auto",
+                    help="acoustic cross-validation of phoneme labels (auto: on for ja, off for en)")
+    ap.add_argument("--min-conf", type=float, default=None,
+                    help="minimum phoneme confidence 0-1 (default: 0.45 for ja, 0.7 for en)")
     ap.add_argument("--work", type=Path, help="working directory (default: temporary)")
     a = ap.parse_args(argv)
 
@@ -32,10 +36,10 @@ def main(argv: list[str] | None = None) -> int:
         if frac >= 1.0:
             print(file=sys.stderr)
 
-    opt = pipeline.Options(name=a.name, gap_fill=a.gap_fill, rvc_model=a.rvc_model, rvc_index=a.rvc_index,
+    opt = pipeline.Options(name=a.name, language=a.language, gap_fill=a.gap_fill, rvc_model=a.rvc_model, rvc_index=a.rvc_index,
                            rvc_command=a.rvc_command, template=a.template,
                            flatten_pitch=not a.no_flatten, min_conf=a.min_conf,
-                           validate=not a.no_validate)
+                           validate={"auto": None, "on": True, "off": False}[a.cross_check])
     try:
         with tempfile.TemporaryDirectory() as td:
             res = pipeline.run(a.input, a.work or Path(td), a.out, opt, progress)
@@ -44,7 +48,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     c = res.report["counts"]
     print(f"\nVoicebank: {res.bank_zip}")
-    print(f"  recorded: {c['recorded']}  rvc: {c['rvc']}  raw template: {c['template_raw']}  missing: {c['missing']}")
+    print(f"  recorded: {c['recorded']}/{c['total_target']}  rvc: {c['rvc']}  raw template: {c['template_raw']}  missing: {c['missing']}")
     if res.dataset_zip:
         print(f"  RVC training dataset: {res.dataset_zip}")
     for w in res.report["warnings"]:

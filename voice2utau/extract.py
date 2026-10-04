@@ -43,25 +43,38 @@ class Clip:
     meta: dict = field(default_factory=dict)
 
 
+def gap(phones: list[Phone], a: int, b: int) -> float:
+    return phones[b].start - phones[a].end
+
+
+def lead(phones: list[Phone], i: int, want: float) -> float:
+    """How far before phone i a clip may start without running into the previous phone."""
+    if i > 0 and gap(phones, i - 1, i) < PAUSE_S:
+        return max(0.0, min(want, gap(phones, i - 1, i) / 2))
+    return want
+
+
+def trail_after(phones: list[Phone], j: int, want: float = 0.15) -> tuple[float, float]:
+    """(how far a clip may extend after phone j, gap to the next phone)."""
+    if j + 1 < len(phones) and gap(phones, j, j + 1) < PAUSE_S:
+        g = max(0.0, gap(phones, j, j + 1))
+        return min(want, g * 0.6), g
+    return want, PAUSE_S
+
+
 def build_candidates(phones: list[Phone], src: str) -> list[Candidate]:
     syms = [classify(p.sym) for p in phones]
     n = len(phones)
     out: list[Candidate] = []
 
-    def gap(a: int, b: int) -> float:
-        return phones[b].start - phones[a].end
+    def lead_(i, want):
+        return lead(phones, i, want)
 
-    def lead(i: int, want: float) -> float:
-        if i > 0 and gap(i - 1, i) < PAUSE_S:
-            return max(0.0, min(want, gap(i - 1, i) / 2))
-        return want
+    def trail_after_(j):
+        return trail_after(phones, j)
 
-    def trail_after(j: int) -> tuple[float, float]:
-        """(trail seconds, gap to next phone)."""
-        if j + 1 < n and gap(j, j + 1) < PAUSE_S:
-            g = max(0.0, gap(j, j + 1))
-            return min(0.15, g * 0.6), g
-        return 0.15, PAUSE_S
+    def gap_(a, b):
+        return gap(phones, a, b)
 
     i = 0
     while i < n:
@@ -69,22 +82,22 @@ def build_candidates(phones: list[Phone], src: str) -> list[Candidate]:
         if s.kind == "V":
             m = MORAE.get(s.value)
             if m:
-                tr, g = trail_after(i)
-                st = phones[i].start - lead(i, 0.06)
+                tr, g = trail_after_(i)
+                st = phones[i].start - lead_(i, 0.06)
                 out.append(Candidate(m, src, st, phones[i].end + tr,
                                      st + 0.03, phones[i].conf, g))
             i += 1
         elif s.kind in ("C", "G"):
             cls, palatal = (s.value, s.palatal) if s.kind == "C" else ("y", False)
             j = i + 1
-            if s.kind == "C" and j < n and syms[j].kind == "G" and gap(i, j) < MAX_CV_GAP_S:
+            if s.kind == "C" and j < n and syms[j].kind == "G" and gap_(i, j) < MAX_CV_GAP_S:
                 palatal = True
                 j += 1
-            if j < n and syms[j].kind == "V" and gap(j - 1, j) < MAX_CV_GAP_S:
+            if j < n and syms[j].kind == "V" and gap_(j - 1, j) < MAX_CV_GAP_S:
                 m = lookup(cls, syms[j].value, palatal)
                 if m:
-                    tr, g = trail_after(j)
-                    st = phones[i].start - lead(i, 0.06)
+                    tr, g = trail_after_(j)
+                    st = phones[i].start - lead_(i, 0.06)
                     split = (phones[j - 1].end + phones[j].start) / 2
                     conf = float(np.mean([p.conf for p in phones[i:j + 1]]))
                     out.append(Candidate(m, src, st, phones[j].end + tr, split, conf, g))
@@ -92,14 +105,14 @@ def build_candidates(phones: list[Phone], src: str) -> list[Candidate]:
             else:
                 # nasal in coda position -> ん
                 nasal = s.kind == "C" and cls in ("n", "m")
-                after_vowel = i > 0 and syms[i - 1].kind == "V" and gap(i - 1, i) < MAX_CV_GAP_S
+                after_vowel = i > 0 and syms[i - 1].kind == "V" and gap_(i - 1, i) < MAX_CV_GAP_S
                 if nasal and after_vowel:
-                    tr, g = trail_after(i)
+                    tr, g = trail_after_(i)
                     out.append(Candidate(MORAE["nn"], src, phones[i].start - 0.05,
                                          phones[i].end + min(0.08, tr), phones[i].start, phones[i].conf, g))
                 i += 1
         elif s.kind == "N":
-            tr, g = trail_after(i)
+            tr, g = trail_after_(i)
             out.append(Candidate(MORAE["nn"], src, phones[i].start - 0.05,
                                  phones[i].end + min(0.08, tr), phones[i].start, phones[i].conf, g))
             i += 1
@@ -136,7 +149,8 @@ def cut_clip(c: Candidate, wav44: Path) -> Clip | None:
     peak = float(np.abs(seg).max())
     if peak < 10 ** (-45 / 20):
         return None
-    f0 = audio.median_f0(seg[len(seg) // 3:], sr)
+    voiced_part = seg[: 2 * len(seg) // 3] if c.mora.kind == "VC" else seg[len(seg) // 3:]
+    f0 = audio.median_f0(voiced_part, sr)
     return Clip(c.mora, seg, split, f0, "recorded", c.conf, c.src)
 
 
@@ -167,23 +181,32 @@ def rank_candidates(cands: list[Candidate], min_conf: float = 0.45, validator=No
     return by_key
 
 
+PITCH_WEIGHT = 0.04     # score lost per semitone away from the speaker's median pitch (capped at 12)
+
+
 def select_best(cands: list[Candidate], wavs: dict[str, Path], min_conf: float = 0.45,
                 top_k: int = 6, validator=None) -> dict[str, Clip]:
     if validator is not None:
         validator.annotate(cands)
-    best: dict[str, Clip] = {}
+    options: dict[str, list[tuple[float, Clip]]] = {}
     for key, cs in rank_candidates(cands, min_conf, validator).items():
-        top: tuple[float, Clip] | None = None
-        for rank, c in enumerate(cs[:top_k]):
+        for c in cs[:top_k]:
             clip = cut_clip(c, wavs[c.src])
             if clip is None:
                 continue
             ok = acoustic_ok(clip)
             if ok <= 0:
                 continue
-            total = (validator.rank_score(c) if validator is not None else c.score) * ok
-            if top is None or total > top[0]:
-                top = (total, clip)
-        if top:
-            best[key] = top[1]
-    return best
+            options.setdefault(key, []).append(
+                ((validator.rank_score(c) if validator is not None else c.score) * ok, clip))
+    # Prefer clips near the speaker's typical pitch: they need little PSOLA shifting when flattened.
+    f0s = [clip.f0 for opts in options.values() for _, clip in opts if clip.f0]
+    median = float(np.median(f0s)) if f0s else None
+
+    def adjusted(opt: tuple[float, Clip]) -> float:
+        total, clip = opt
+        if median and clip.f0:
+            total -= PITCH_WEIGHT * min(12.0, abs(12 * np.log2(clip.f0 / median)))
+        return total
+
+    return {key: max(opts, key=adjusted)[1] for key, opts in options.items()}

@@ -16,9 +16,8 @@ from pathlib import Path
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 
-from . import pipeline
+from . import pipeline, profiles
 from .ingest import AUDIO_EXT, IngestError
-from .morae import MORAE
 
 log = logging.getLogger("voice2utau")
 
@@ -103,7 +102,10 @@ def engine_info() -> dict:
             "espeak": shutil.which("espeak-ng") is not None,
             "ffmpeg": shutil.which("ffmpeg") is not None,
             "audio_ext": sorted(AUDIO_EXT), "max_upload_mb": MAX_UPLOAD // 2**20,
-            "morae": [{"key": m.key, "kana": m.kana, "cls": m.cls} for m in MORAE.values()]}
+            "languages": [{"code": p.code, "name": p.name, "description": p.description}
+                          for p in profiles.PROFILES.values()],
+            "units": {p.code: [{"key": m.key, "alias": m.kana, "group": p.group_of(m)} for m in p.units.values()]
+                      for p in profiles.PROFILES.values()}}
 
 
 @app.get("/api/config")
@@ -115,15 +117,20 @@ def config() -> dict:
 async def create_job(
     file: UploadFile = File(...),
     name: str = Form("MyVoice"),
+    language: str = Form("ja"),
     gap_fill: str = Form("auto"),
     flatten_pitch: bool = Form(True),
-    cross_check: bool = Form(True),
+    cross_check: str = Form("auto"),
     rvc_model: UploadFile | None = File(None),
     rvc_index: UploadFile | None = File(None),
     template: UploadFile | None = File(None),
 ) -> JSONResponse:
     if gap_fill not in pipeline.GAP_FILL_MODES:
         raise HTTPException(400, f"gap_fill must be one of {pipeline.GAP_FILL_MODES}")
+    if language not in profiles.PROFILES:
+        raise HTTPException(400, f"language must be one of {sorted(profiles.PROFILES)}")
+    if cross_check not in ("auto", "on", "off"):
+        raise HTTPException(400, "cross_check must be auto, on or off")
     ext = Path(file.filename or "").suffix.lower()
     if ext != ".zip" and ext not in AUDIO_EXT:
         raise HTTPException(400, "upload a .zip of voice lines or an audio file (mp3, wav, flac, ogg, m4a, …)")
@@ -133,8 +140,9 @@ async def create_job(
     try:
         upload = jdir / "in" / f"upload{ext}"
         await _save_upload(file, upload, MAX_UPLOAD)
-        opt = pipeline.Options(name=(name.strip() or "MyVoice")[:60], gap_fill=gap_fill,
-                               flatten_pitch=flatten_pitch, validate=cross_check)
+        opt = pipeline.Options(name=(name.strip() or "MyVoice")[:60], language=language, gap_fill=gap_fill,
+                               flatten_pitch=flatten_pitch,
+                               validate={"auto": None, "on": True, "off": False}[cross_check])
         if rvc_model is not None and rvc_model.filename:
             if Path(rvc_model.filename).suffix.lower() != ".pth":
                 raise HTTPException(400, "the RVC model must be a .pth file")
@@ -211,7 +219,7 @@ def dataset(job_id: str) -> FileResponse:
 @app.get("/api/jobs/{job_id}/sample/{key}.wav")
 def sample(job_id: str, key: str) -> FileResponse:
     j = _job(job_id)
-    if key not in MORAE or j.bank_dir is None:
+    if not re.fullmatch(r"[a-z_]{1,16}", key) or j.bank_dir is None:
         raise HTTPException(404, "no such sample")
     p = j.bank_dir / f"{key}.wav"
     if not p.exists():

@@ -23,16 +23,22 @@ from .morae import MORAE, VOICELESS_CLASSES, DEFAULT_PRE_MS, Mora
 
 # measured espeak-ng "ja" median F0 for -p (pitch) 0/25/50/75/99
 _P_POINTS = [0, 25, 50, 75, 99]
-_F0_BY_VOICE = {"ja": [62, 75, 95, 125, 164], "ja+f3": [100, 125, 195, 255, 330]}
+_F0_BY_VOICE = {
+    "ja": {"ja": [62, 75, 95, 125, 164], "ja+f3": [100, 125, 195, 255, 330]},
+    # en-us: p0/p50/p99 measured at 63/88/157 Hz and +f3 at ~176 Hz (p50); other points interpolated
+    "en": {"en-us": [63, 74, 88, 120, 157], "en-us+f3": [125, 148, 176, 235, 314]},
+}
 
 
-def pick_espeak_voice(target_hz: float | None) -> tuple[str, int]:
+def pick_espeak_voice(target_hz: float | None, lang: str = "ja") -> tuple[str, int]:
     """Choose an espeak voice/pitch whose natural F0 is as close to target_hz as possible."""
+    voices = _F0_BY_VOICE[lang]
+    base = next(iter(voices))
     if not target_hz:
-        return "ja", 50
+        return base, 50
     best = None
-    for voice, f0s in _F0_BY_VOICE.items():
-        if voice != "ja" and target_hz < 140:      # female formants make no sense for a deep target
+    for voice, f0s in voices.items():
+        if voice != base and target_hz < 140:      # female formants make no sense for a deep target
             continue
         for p in range(0, 100, 5):
             f0 = float(np.interp(p, _P_POINTS, f0s))
@@ -50,8 +56,9 @@ class EspeakTemplate:
     name = "espeak-ng (generated)"
     license = "Generated locally with espeak-ng (GPL-3 tool; output audio is yours)"
 
-    def __init__(self, target_f0: float | None = None, speed: int = 110):
-        self.voice, self.pitch = pick_espeak_voice(target_f0)
+    def __init__(self, target_f0: float | None = None, speed: int = 110, lang: str = "ja"):
+        self.lang = lang
+        self.voice, self.pitch = pick_espeak_voice(target_f0, lang)
         self.speed = speed
         try:
             subprocess.run(["espeak-ng", "--version"], capture_output=True, check=True)
@@ -70,6 +77,15 @@ class EspeakTemplate:
 
     def get(self, mora: Mora) -> Clip | None:
         sr = audio.SR_BANK
+        if mora.lang == "en":
+            from .english import espeak_phonemes
+            x, _ = self._say(f"[[{espeak_phonemes(mora)}]]")
+            a, b = audio.trim_silence(x, sr)
+            x = x[a:b]
+            if len(x) < sr * 0.1:
+                return None
+            x, split = _crop_en(mora, x, sr)
+            return _finish(mora, x, split, "template", self.name)
         if mora.key == "nn":
             x, _ = self._say("あん")
             a, b = audio.trim_silence(x, sr)
@@ -84,6 +100,20 @@ class EspeakTemplate:
         if len(x) < sr * 0.1:
             return None
         return _finish(mora, x, None, "template", self.name)
+
+
+def _crop_en(mora: Mora, x: np.ndarray, sr: int) -> tuple[np.ndarray, float]:
+    """Shorten a synthesised syllable to the length of a normal recorded unit; return (audio, split)."""
+    split = estimate_split(mora, x, sr)
+    glide = 0.15 if mora.vowel in ("aw", "ay", "ey", "ow", "oy") else 0.0   # diphthongs need time to glide
+    if mora.kind == "CV":
+        x = x[: int((split + 0.20 + glide) * sr)]
+    elif mora.kind == "VC":
+        a = max(0, int((split - 0.18 - glide) * sr))
+        x, split = x[a:], split - a / sr
+    else:
+        x = x[: int(0.35 * sr)]
+    return x, split
 
 
 def _nasal_tail(x: np.ndarray, sr: int) -> np.ndarray | None:
@@ -105,13 +135,21 @@ def _finish(mora: Mora, x: np.ndarray, split_s: float | None, source: str, origi
     x = audio.fade(x, sr)
     if split_s is None:
         split_s = estimate_split(mora, x, sr)
-    f0 = audio.median_f0(x[len(x) // 3:], sr)
+    part = x[: 2 * len(x) // 3] if mora.kind == "VC" else x[len(x) // 3:]
+    f0 = audio.median_f0(part, sr)
     return Clip(mora, x, split_s, f0, source, 1.0, origin)
 
 
 def estimate_split(mora: Mora, x: np.ndarray, sr: int) -> float:
     """Consonant/vowel boundary (seconds) for a clip we have no alignment for."""
     dur = len(x) / sr
+    if mora.lang == "en":
+        from .english import VOICELESS, default_split
+        if mora.kind == "CV" and mora.cls in VOICELESS:
+            onset = audio.voicing_onset(x, sr)
+            if onset is not None and 0.03 <= onset <= dur * 0.7:
+                return onset
+        return default_split(mora, dur)
     default = DEFAULT_PRE_MS.get(mora.cls, 60) / 1000
     if mora.cls in VOICELESS_CLASSES:
         onset = audio.voicing_onset(x, sr)
@@ -132,7 +170,12 @@ def _to_hiragana(s: str) -> str:
     return "".join(chr(ord(c) - 0x60) if "ァ" <= c <= "ヶ" else c for c in unicodedata.normalize("NFKC", s))
 
 
-def alias_to_mora(alias: str) -> Mora | None:
+def alias_to_mora(alias: str, units: dict[str, Mora] | None = None) -> Mora | None:
+    """Map an oto.ini alias to a unit of the target inventory (Japanese by default)."""
+    if units is not None and next(iter(units.values())).lang == "en":
+        a = " ".join(alias.lower().split())
+        by_alias = {m.kana: m for m in units.values()}
+        return by_alias.get(a) or by_alias.get(a[2:] if a.startswith("- ") and f"- {a[2:]}" not in by_alias else a)
     a = _to_hiragana(alias.strip())
     a = a[2:] if a.startswith("- ") else a
     if a in _KANA_BY_ALIAS:
@@ -153,7 +196,8 @@ def _read_text(p: Path) -> str:
 class VoicebankTemplate:
     """A CV-style UTAU voicebank on disk (folder, or a .zip that is extracted to `workdir`)."""
 
-    def __init__(self, path: Path, workdir: Path, name: str | None = None):
+    def __init__(self, path: Path, workdir: Path, name: str | None = None,
+                 units: dict[str, Mora] | None = None):
         path = Path(path)
         if path.suffix.lower() == ".zip":
             dest = Path(workdir) / "template_bank"
@@ -173,7 +217,7 @@ class VoicebankTemplate:
             f = rest.split(",")
             if len(f) < 6:
                 continue
-            m = alias_to_mora(f[0])
+            m = alias_to_mora(f[0], units)
             if m is None or m.key in self._entries:
                 continue
             try:

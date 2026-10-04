@@ -23,6 +23,11 @@ SEED_CONF = 0.7     # candidates at least this confident define the centroids
 MIN_SEED = 4        # a centroid needs at least this many members
 
 
+def _cons_key(c: Candidate):
+    """Onset and coda consonants sound different, so they get separate centroids."""
+    return (c.mora.kind == "VC", c.mora.cls)
+
+
 class Validator:
     def __init__(self, wav16: dict[str, Path]):
         import torch
@@ -48,10 +53,15 @@ class Validator:
         b = min(b, len(m))
         if b - a < 6:
             return None
-        v0 = s + int(0.3 * (b - s))
-        v1 = max(v0 + 1, b - int(0.15 * (b - s)))
+        if c.mora.kind == "VC":          # vowel first, consonant after the split
+            v0 = a + int(0.3 * (s - a))
+            v1 = max(v0 + 1, s - int(0.1 * (s - a)))
+            cons = m[s:b].mean(0) if b - s >= 2 else None
+        else:
+            v0 = s + int(0.3 * (b - s))
+            v1 = max(v0 + 1, b - int(0.15 * (b - s)))
+            cons = m[a:max(a + 1, s)].mean(0) if s - a >= 2 else None
         vowel = m[v0:v1].mean(0) if v1 <= len(m) and v0 < v1 else None
-        cons = m[a:max(a + 1, s)].mean(0) if s - a >= 2 else None
         shape = m[np.linspace(a, b - 1, 8).astype(int)].ravel()
         return vowel, cons, shape
 
@@ -81,10 +91,10 @@ class Validator:
         usable = [c for c in cands if c.feat is not None]
         seed = [c for c in usable if c.conf >= SEED_CONF]
         vcen = self._centroids(seed, 0, lambda c: c.mora.vowel or "N")
-        ccen = self._centroids(seed, 1, lambda c: c.mora.cls)
+        ccen = self._centroids(seed, 1, _cons_key)
         for c in usable:
             c.vmargin = self._margin(c.feat[0], vcen, c.mora.vowel or "N")
-            c.cmargin = self._margin(c.feat[1], ccen, c.mora.cls)
+            c.cmargin = self._margin(c.feat[1], ccen, _cons_key(c))
         by = defaultdict(list)
         for c in usable:
             if c.vmargin is None or c.vmargin > 0:
