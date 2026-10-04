@@ -187,3 +187,14 @@ def test_zip_sources_get_language_from_folders(tmp_path):
     assert got == {"a.wav": "en", "b.wav": "de", "c.wav": "en"}
     got = {s.original: s.lang for s in prepare_sources(tmp_path / "v.zip", tmp_path / "w2", default_lang="de")}
     assert got == {"a.wav": "en", "b.wav": "de", "c.wav": "de"}
+
+
+def test_command_backend_drops_flag_with_empty_value(tmp_path):
+    (tmp_path / "m.pth").write_bytes(b"x")
+    script = tmp_path / "echo_args.py"
+    script.write_text("import sys, json; open(sys.argv[-1], 'w').write(json.dumps(sys.argv[1:-1]))")
+    be = rvc.CommandBackend(f"python {script} --in {{input}} --model {{model}} --index {{index}} --k {{transpose}} {{output}}",
+                            tmp_path / "m.pth", None)
+    be.convert(tmp_path / "in.wav", tmp_path / "out.json", 3)
+    import json
+    assert json.loads((tmp_path / "out.json").read_text()) == ["--in", str(tmp_path / "in.wav"), "--model", str(tmp_path / "m.pth"), "--k", "3"]

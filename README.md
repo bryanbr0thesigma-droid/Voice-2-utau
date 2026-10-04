@@ -58,6 +58,16 @@ The phoneme model (`facebook/wav2vec2-xlsr-53-espeak-cv-ft`, ~1.2 GB) downloads 
 
 RVC is not bundled. Pick one:
 
+0. **Bundled runner `tools/rvc_infer.py`** (recommended; works without fairseq, tested here on CPU with a real RVC v2 model):
+   ```bash
+   python -m venv .venv-rvc && . .venv-rvc/bin/activate
+   pip install -r requirements-rvc.txt && pip install --no-deps rvc-python
+   export V2U_RVC_COMMAND="$PWD/.venv-rvc/bin/python $PWD/tools/rvc_infer.py --input {input} --output {output} --model {model} --index {index} --transpose {transpose}"
+   export V2U_RVC_BATCH=40      # clips per RVC call: each call spends ~25 s loading models on CPU
+   ```
+   Base models (ContentVec + RMVPE, ~560 MB) download on first use. All checkpoints, including your `.pth`, are
+   loaded with torch's restricted `weights_only` unpickler, so a booby-trapped model file cannot run code.
+   On CPU, expect roughly 20–30 minutes for a full 675-unit English bank; use a GPU (`V2U_DEVICE=cuda:0`) if you have one.
 1. `pip install rvc-python` – used automatically when installed. (`V2U_DEVICE=cuda:0` to use a GPU.)
 2. Any RVC command-line tool (RVC WebUI, Applio, …) via a command template. Placeholders:
    `{input} {output} {model} {index} {transpose}`:

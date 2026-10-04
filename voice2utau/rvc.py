@@ -23,8 +23,9 @@ import numpy as np
 from . import audio
 from .extract import Clip
 
-BATCH_SIZE = 16
-GAP_S = 0.5
+# Each RVC call has a fixed start-up cost (loading models), so clips are converted in batches.
+BATCH_SIZE = int(os.environ.get("V2U_RVC_BATCH", "16"))
+GAP_S = float(os.environ.get("V2U_RVC_GAP_S", "0.5"))
 
 
 class RVCError(RuntimeError):
@@ -50,7 +51,14 @@ class CommandBackend(RVCBackend):
         values = {"input": str(src), "output": str(dst), "model": str(self.model),
                   "index": str(self.index) if self.index else "", "transpose": str(transpose)}
         argv = [tok.format_map(values) for tok in shlex.split(self.template)]
-        argv = [a for a in argv if a != ""]   # drop empty optional {index}
+        cleaned: list[str] = []
+        for a in argv:                        # an empty value (e.g. no {index}) drops its flag too
+            if a == "":
+                if cleaned and cleaned[-1].startswith("-"):
+                    cleaned.pop()
+                continue
+            cleaned.append(a)
+        argv = cleaned
         try:
             r = subprocess.run(argv, capture_output=True, text=True, timeout=self.timeout)
         except FileNotFoundError as e:

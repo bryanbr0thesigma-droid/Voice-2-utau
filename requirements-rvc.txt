@@ -1,0 +1,18 @@
+# Dependencies for tools/rvc_infer.py (RVC inference without fairseq).
+# Install these, then:  pip install --no-deps rvc-python
+# (rvc-python's own pins - fairseq 0.12.2, faiss-cpu 1.7.3, numpy<=1.23.5 - do not build on modern Python.)
+torch
+torchaudio
+numpy
+scipy
+soundfile
+librosa
+av
+faiss-cpu
+pyworld
+torchcrepe
+praat-parselmouth
+loguru
+transformers
+huggingface_hub
+requests
