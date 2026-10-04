@@ -35,6 +35,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--state", type=Path,
                     help="directory that accumulates the best clips across several uploads: run once per zip "
                          "with the same --state and every run rebuilds the bank from everything seen so far")
+    ap.add_argument("--speaker", default="all",
+                    help="when the corpus holds several voices: 'all' (default), 'largest', or a voice number. "
+                         "Previews of every voice are written to <out>/speaker_previews. With --state the "
+                         "voices stay the same across zips.")
     ap.add_argument("--work", type=Path, help="working directory (default: temporary)")
     a = ap.parse_args(argv)
 
@@ -45,7 +49,7 @@ def main(argv: list[str] | None = None) -> int:
 
     opt = pipeline.Options(name=a.name, language=a.language, source_lang=a.source_lang, gap_fill=a.gap_fill, rvc_model=a.rvc_model, rvc_index=a.rvc_index,
                            rvc_command=a.rvc_command, template=a.template,
-                           flatten_pitch=not a.no_flatten, state_dir=a.state, min_conf=a.min_conf,
+                           flatten_pitch=not a.no_flatten, state_dir=a.state, speaker=a.speaker, min_conf=a.min_conf,
                            validate={"auto": None, "on": True, "off": False}[a.cross_check])
     try:
         with tempfile.TemporaryDirectory() as td:

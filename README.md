@@ -110,6 +110,13 @@ detected and ignored. Selection prefers calm, steady-pitch takes near the speake
 `coverage.speech_covered_by_recordings` (share of everyday English covered by real recordings) and the most-needed missing units.
 (Measured on LJSpeech: 50 lines → 210 units / 73 % of speech; 100 lines → 263 units / 79 %.)
 
+### Corpora with several voices (e.g. a game's villager, mayor, trader)
+
+`--speaker largest` (or a voice number) clusters the files by voice and uses only one. Short audio previews of every
+voice are written to `<out>/speaker_previews/voice_N.wav` so you can pick the right number, and the report lists each
+voice's file count and pitch. With `--state`, the fitted voices are stored, so later zips are assigned to the same ones.
+(The Minecraft villager pack separated into ~3 voices at about 237 / 335 / 444 Hz; silhouette 0.30 vs 0.001 for random labels.)
+
 ### Gap-fill modes
 
 | mode | behaviour |

@@ -15,6 +15,7 @@ from .corpus import Corpus, CorpusError, file_sha1
 from .extract import Clip, choose, collect_options
 from .ingest import IngestError, Source, prepare_sources
 from .validate import Validator
+from . import speakers
 from .templates import EspeakTemplate, TemplateError, VoicebankTemplate
 
 GAP_FILL_MODES = ("auto", "rvc", "template", "none")
@@ -37,6 +38,7 @@ class Options:
     template: Path | None = None      # custom UTAU bank (.zip / folder); default = espeak-ng
     flatten_pitch: bool = True
     state_dir: Path | None = None     # accumulate the best clips across several uploads in this directory
+    speaker: str = "all"            # all | largest | 0,1,2…: which voice to use when the corpus holds several
     min_conf: float | None = None     # None = language default
     validate: bool | None = None      # cross-check labels against the speaker's other recordings; None = language default
 
@@ -116,6 +118,9 @@ def run(upload: Path, work: Path, out_dir: Path, opt: Options,
                                   opt.source_lang)
     except IngestError as e:
         raise PipelineError(str(e)) from e
+    speaker_info = None
+    if opt.speaker != "all" and len(sources) >= speakers.MIN_FILES:
+        sources, speaker_info = _select_speaker(sources, opt, out_dir, P)
     lang_of = {s.id: s.lang for s in sources}
     total_s = sum(s.seconds for s in sources)
     P("ingest", 1.0, f"{len(sources)} file(s), {total_s / 60:.1f} min of audio")
@@ -288,6 +293,7 @@ def run(upload: Path, work: Path, out_dir: Path, opt: Options,
         "gap_fill_mode": mode,
         "settings": {"min_confidence": min_conf, "cross_check": validate},
         "corpus": corpus_info,
+        "speakers": speaker_info,
         "rvc_transpose": transpose if mode in ("rvc", "auto") and any(c.source == "rvc" for c in clips.values()) else None,
         "template": template_info,
         "sources": [{"file": s.original, "seconds": round(s.seconds, 1), "lang": s.lang} for s in sources],
@@ -357,3 +363,51 @@ def _coverage(clips: dict[str, Clip], units: dict, prof) -> dict:
                     key=lambda k: -w[k])
     out["most_needed_missing"] = [{"key": k, "alias": units[k].kana, "share": round(w[k], 5)} for k in needed[:25]]
     return out
+
+
+def _select_speaker(sources: list[Source], opt: Options, out_dir: Path, P: Progress) -> tuple[list[Source], dict]:
+    """Keep only the files spoken by the chosen voice; write short audio previews of every voice."""
+    P("ingest", 1.0, "Telling the voices apart…")
+    feats, kept = [], []
+    for s in sources:
+        f = speakers.fingerprint(s.wav16)
+        if f is not None:
+            feats.append(f)
+            kept.append(s)
+    if len(kept) < speakers.MIN_FILES:
+        return sources, {"note": "too few usable files to tell voices apart"}
+    F = np.stack(feats)
+    model_path = opt.state_dir / "speakers.json" if opt.state_dir else None
+    model, fresh = speakers.load_or_fit(model_path, F)
+    lab = model.assign(F)
+    if opt.speaker == "largest":
+        chosen = 0
+    elif opt.speaker.isdigit() and int(opt.speaker) < len(model.sizes):
+        chosen = int(opt.speaker)
+    else:
+        raise PipelineError(f"speaker must be 'all', 'largest' or a number below {len(model.sizes)}")
+    clusters = [{"index": c, "files": int((lab == c).sum()),
+                 "median_f0_hz": round(float(2 ** np.median(F[lab == c, -1])), 1) if (lab == c).any() else None}
+                for c in range(len(model.sizes))]
+    _write_previews(kept, F, lab, model, out_dir / "speaker_previews")
+    keep = [s for s, l in zip(kept, lab) if l == chosen]
+    info = {"voices_found": len(model.sizes), "chosen": chosen, "silhouette": round(model.silhouette, 3),
+            "clusters": clusters, "files_kept": len(keep), "files_dropped": len(sources) - len(keep),
+            "model_reused": not fresh}
+    return keep, info
+
+
+def _write_previews(sources: list[Source], F: np.ndarray, lab: np.ndarray, model, dest: Path) -> None:
+    dest.mkdir(parents=True, exist_ok=True)
+    z = model.standardise(F)
+    gap = np.zeros(int(0.4 * audio.SR_BANK), np.float32)
+    for c in range(len(model.sizes)):
+        idx = np.where(lab == c)[0]
+        if not len(idx):
+            continue
+        near = idx[np.argsort(((z[idx] - model.centroids[c]) ** 2).sum(1))[:4]]      # most typical files
+        parts: list[np.ndarray] = []
+        for i in near:
+            x, sr = audio.read_wav(sources[i].wav44, 0, 4.0)
+            parts += [x, gap]
+        audio.write_wav(dest / f"voice_{c}.wav", np.concatenate(parts), audio.SR_BANK)
