@@ -130,3 +130,13 @@ def test_native_recording_always_beats_german(tmp_path):
     assert got[key].origin == "en"
     # ... and German is used when there is no English candidate
     assert extract.select_best([mk("de", .9, 0.1)], wavs, min_conf=.7)[key].origin == "de"
+
+
+def test_mixed_mode_drops_sounds_that_differ_between_english_and_german():
+    for ipa in ("ʁ", "x", "ç", "ts", "ʏ", "ø", "y", "r", "a", "aː", "eː", "oː", "ɐ"):
+        assert english.classify_mixed(ipa).kind == "X", ipa
+    for ipa, arpa in (("ɪ", "ih"), ("iː", "iy"), ("æ", "ae"), ("ɹ", "r"), ("aɪ", "ay"), ("θ", "th"), ("ʃ", "sh")):
+        assert english.classify_mixed(ipa).value == arpa, ipa
+    ph = [Phone("ʁ", 1.0, 1.05, .9), Phone("ɪ", 1.08, 1.16, .9)]
+    assert [c.mora.key for c in english.build_candidates(ph, "s", "mixed")] == ["v_ih"]      # no cv_r_ih
+    assert all(c.penalty == 0 for c in english.build_candidates(ph, "s", "mixed"))

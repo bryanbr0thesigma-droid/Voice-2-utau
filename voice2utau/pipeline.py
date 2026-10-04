@@ -141,7 +141,7 @@ def run(upload: Path, work: Path, out_dir: Path, opt: Options,
     native = prof.native_lang
 
     def is_fallback(c: Clip) -> bool:
-        return bool(native) and c.source == "recorded" and lang_of.get(c.origin, native) != native
+        return bool(native) and c.source == "recorded" and lang_of.get(c.origin, native) not in (native, "mixed")
     ref_f0 = [c.f0 for c in clips.values() if c.f0 and not is_fallback(c)] or [c.f0 for c in clips.values() if c.f0]
     target_f0 = float(np.median(ref_f0)) if ref_f0 else None
     if target_f0 is None:

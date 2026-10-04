@@ -111,7 +111,22 @@ def classify_de(sym: str) -> Sym:
     return Sym("X")
 
 
-CLASSIFIERS = {"en": classify, "de": classify_de}
+# Recording whose language per line is unknown (English and German interleaved): accept only tokens that
+# keep the same meaning in both languages. Dropped: sounds that are German-only or whose English reading
+# would be wrong for a German speaker (German /a/ is not English /æ/; German r is /ʁ/ or a trill; tense
+# /e o/ are pure vowels; ü ö are not /uw eh/).
+_MIXED_DROP = {"ʁ", "x", "ç", "ts", "pf", "ʏ", "ø", "œ", "y", "ɐ", "e", "o", "r", "ɾ", "a", "ä",
+               "eː", "oː", "aː", "yː", "øː", "ɛː", "ɑ̃", "ɔ̃", "ɛ̃", "œ̃"}
+
+
+def classify_mixed(sym: str) -> Sym:
+    base = _STRIP.sub("", sym.replace("ʲ", ""))
+    if sym in _MIXED_DROP or base in _MIXED_DROP:
+        return Sym("X")
+    return classify(sym)
+
+
+CLASSIFIERS = {"en": classify, "de": classify_de, "mixed": classify_mixed}
 
 
 # --------------------------------------------------------------------- candidates
@@ -160,7 +175,7 @@ def build_candidates(phones: list[Phone], src: str, source_lang: str = "en") -> 
                 out.append(Candidate(UNITS[key], src, st, cp.end + tr, split, conf, g))
     for c in out:
         c.start = max(0.0, c.start)
-        c.penalty = 0.0 if source_lang == "en" else DE_PENALTY
+        c.penalty = DE_PENALTY if source_lang == "de" else 0.0
         c.score = prescore(c)
     return out
 

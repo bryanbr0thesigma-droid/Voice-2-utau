@@ -59,7 +59,7 @@ def safe_extract_zip(zip_path: Path, dest: Path, allowed_ext: set[str] | None = 
     return out
 
 
-SOURCE_LANGS = ("en", "de")
+SOURCE_LANGS = ("en", "de", "mixed")
 _LANG_WORDS = {"en": {"en", "eng", "english", "enus", "en-us", "en-gb"},
                "de": {"de", "ger", "deu", "german", "deutsch", "de-de"}}
 

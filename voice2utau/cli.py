@@ -14,9 +14,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("input", type=Path, help="a .zip of voice lines, or one (long) audio file such as .mp3")
     ap.add_argument("--language", choices=sorted(profiles.PROFILES), default="ja",
                     help="voicebank type: ja = hiragana CV, en = English ARPAbet CVVC (default: ja)")
-    ap.add_argument("--source-lang", choices=["en", "de"], default="en",
+    ap.add_argument("--source-lang", choices=["en", "de", "mixed"], default="en",
                     help="language spoken in the recording; in a zip, folders/file names tagged en/de override it. "
-                         "German sounds are only used as a fallback for units the English lines lack.")
+                         "German sounds are only used as a fallback for units the English lines lack. "
+                         "mixed = English and German interleaved: only sounds that mean the same in both are used.")
     ap.add_argument("--name", default="MyVoice", help="voicebank name")
     ap.add_argument("-o", "--out", type=Path, default=Path("output"), help="output directory")
     ap.add_argument("--gap-fill", choices=pipeline.GAP_FILL_MODES, default="auto",
