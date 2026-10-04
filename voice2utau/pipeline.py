@@ -274,6 +274,7 @@ def run(upload: Path, work: Path, out_dir: Path, opt: Options,
         "warnings": warnings,
         "elapsed_s": round(time.time() - t0, 1),
     }
+    report["coverage"] = _coverage(clips, units, prof)
     root = bank.write_bank(clips, out_dir, opt.name, report, units)
     zpath = bank.zip_bank(root, out_dir / f"{root.name}_utau.zip")
 
@@ -311,3 +312,22 @@ def _zip_dataset(folder: Path, zpath: Path) -> Path | None:
         for f in files:
             zf.write(f, f"dataset/{f.name}")
     return zpath
+
+
+def _coverage(clips: dict[str, Clip], units: dict, prof) -> dict:
+    """How much of everyday speech the bank covers, from real recordings and in total."""
+    out: dict = {"recorded_units": sum(c.source == "recorded" for c in clips.values()),
+                 "total_units": len(clips), "target_units": len(units)}
+    w = prof.weights() if prof.weights else {}
+    if not w:
+        return out
+    tot = sum(w.values()) or 1.0
+    rec = sum(w.get(k, 0.0) for k, c in clips.items() if c.source == "recorded")
+    allc = sum(w.get(k, 0.0) for k in clips)
+    out["speech_covered_by_recordings"] = round(rec / tot, 4)
+    out["speech_covered_total"] = round(allc / tot, 4)
+    # units that are not real recordings (absent or filled by RVC/template), most common first
+    needed = sorted((k for k in units if k in w and (k not in clips or clips[k].source != "recorded")),
+                    key=lambda k: -w[k])
+    out["most_needed_missing"] = [{"key": k, "alias": units[k].kana, "share": round(w[k], 5)} for k in needed[:25]]
+    return out

@@ -251,6 +251,15 @@ function showResult(j) {
     (c.template_raw ? `<span><i class="dot" style="background:var(--tpl)"></i>${c.template_raw} raw template</span>` : "") +
     `<span><i class="dot" style="background:var(--miss)"></i>${c.missing} missing</span>` +
     (r.bank_f0_hz ? `<span>pitch ≈ ${r.bank_f0_hz} Hz</span>` : "");
+  const cv = r.coverage || {};
+  if (cv.speech_covered_by_recordings != null) {
+    const pct = x => (x * 100).toFixed(1) + "%";
+    $("counts").innerHTML += `<span title="Weighted by how often each unit occurs in everyday English">` +
+      `<b>${pct(cv.speech_covered_by_recordings)}</b> of everyday English comes from real recordings</span>`;
+    if ((cv.most_needed_missing || []).length)
+      $("counts").innerHTML += `<span class="hint" style="flex-basis:100%">Most needed units not from recordings: ` +
+        cv.most_needed_missing.slice(0, 12).map(m => esc(m.alias)).join(" · ") + `</span>`;
+  }
   $("downloads").innerHTML =
     `<a class="btn" href="/api/jobs/${j.id}/download">Download voicebank (.zip)</a>` +
     (j.has_dataset ? `<a class="btn alt" href="/api/jobs/${j.id}/dataset">RVC training dataset (.zip)</a>` : "");

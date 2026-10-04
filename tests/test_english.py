@@ -140,3 +140,16 @@ def test_mixed_mode_drops_sounds_that_differ_between_english_and_german():
     ph = [Phone("ʁ", 1.0, 1.05, .9), Phone("ɪ", 1.08, 1.16, .9)]
     assert [c.mora.key for c in english.build_candidates(ph, "s", "mixed")] == ["v_ih"]      # no cv_r_ih
     assert all(c.penalty == 0 for c in english.build_candidates(ph, "s", "mixed"))
+
+
+def test_unit_weights_and_coverage():
+    w = english.unit_weights()
+    assert abs(sum(w.values()) - 1) < 1e-3 and set(w) <= set(english.UNITS)
+    top = sorted(w, key=w.get, reverse=True)
+    assert sum(w[k] for k in top[:300]) > 0.9                     # 300 units cover >90 % of everyday English
+    clips = {k: Clip(english.UNITS[k], np.zeros(100, np.float32), 0.0, 100.0) for k in top[:5]}
+    clips[top[3]].source = "rvc"
+    cov = pipeline._coverage(clips, english.UNITS, profiles.get("en"))
+    assert cov["recorded_units"] == 4 and 0 < cov["speech_covered_by_recordings"] < cov["speech_covered_total"] <= 1
+    assert cov["most_needed_missing"][0]["key"] == top[3]          # the highest-share non-recorded unit
+    assert "speech_covered_total" not in pipeline._coverage({}, __import__("voice2utau.morae").morae.MORAE, profiles.get("ja"))

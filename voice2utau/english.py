@@ -7,6 +7,10 @@ Units
 """
 from __future__ import annotations
 
+import json
+from functools import lru_cache
+from pathlib import Path
+
 import numpy as np
 
 from .extract import Candidate, gap, lead, trail_after, prescore
@@ -212,3 +216,10 @@ def default_split(m: Mora, dur_s: float) -> float:
     if m.kind == "VC":
         return max(0.06, dur_s - _TAIL_MS.get(m.cls, 90) / 1000)
     return min(_PRE_MS.get(m.cls, 60) / 1000, dur_s * 0.5)
+
+
+@lru_cache(maxsize=1)
+def unit_weights() -> dict[str, float]:
+    """Share of everyday English speech each unit accounts for (sums to 1). See tools/build_unit_freq.py."""
+    p = Path(__file__).parent / "data" / "en_unit_freq.json"
+    return json.loads(p.read_text(encoding="utf-8"))["units"] if p.exists() else {}
