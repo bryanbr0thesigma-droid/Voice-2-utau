@@ -15,6 +15,16 @@ Two bank types (`--language ja|en`, or the "Voicebank type" menu in the web app)
   Aliases are plain ARPAbet pairs; use them as lyrics in UTAU, or map them with a phonemizer/`prefix.map` in
   your editor. Impossible English combinations (e.g. an `ng` onset) are left out.
 
+### Mixing English and German lines (English bank)
+
+German can top up an English bank: put the files in `en/` and `de/` folders inside the zip (or add `_en` / `_de`
+to the file name; a single file uses the "Language of the recording" setting). German is a **fallback only** — it
+is used for an English unit only when no English line produced a usable one, and it is shown in the result grid
+with a dotted underline and in the report (`lang`). Only German sounds with a close English match are used
+(ɪ iː ʊ uː ɛ ɔ a ə, ay/aw/oy, p b t d k g f v s z sh zh h m n ng l y ch jh). Dropped on purpose: ʁ, x, ç, ts, pf, y, ʏ, ø, œ and the pure
+vowels eː/oː, which have no honest English equivalent. If the German lines are voiced by a different actor than the
+English ones, the recordings will not match in timbre — check the underlined cells by ear.
+
 ## How it works
 
 ```
@@ -105,7 +115,7 @@ Verified in development: decoding of zip/mp3/flac, the full pipeline on a 3-minu
 real human speech (JSUT, 9 min), the web UI in a browser, `oto.ini` Shift-JIS output, zip-slip/size-limit
 handling, RVC batching/splitting through a stand-in RVC command, and the 32 unit tests.
 
-**Not verified:** a real RVC model/engine (no GPU or model here — `rvc-python` and CLI wiring are written to
+**Not verified:** the German fallback on real German speech (it is unit-tested and the sound mapping is conservative, but I have not measured its accuracy); a real RVC model/engine (no GPU or model here — `rvc-python` and CLI wiring are written to
 their documented interfaces but only the plumbing was exercised), and loading the result in UTAU/OpenUTAU.
 
 ### Accuracy — please read

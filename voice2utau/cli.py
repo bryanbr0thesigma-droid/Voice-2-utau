@@ -14,6 +14,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("input", type=Path, help="a .zip of voice lines, or one (long) audio file such as .mp3")
     ap.add_argument("--language", choices=sorted(profiles.PROFILES), default="ja",
                     help="voicebank type: ja = hiragana CV, en = English ARPAbet CVVC (default: ja)")
+    ap.add_argument("--source-lang", choices=["en", "de"], default="en",
+                    help="language spoken in the recording; in a zip, folders/file names tagged en/de override it. "
+                         "German sounds are only used as a fallback for units the English lines lack.")
     ap.add_argument("--name", default="MyVoice", help="voicebank name")
     ap.add_argument("-o", "--out", type=Path, default=Path("output"), help="output directory")
     ap.add_argument("--gap-fill", choices=pipeline.GAP_FILL_MODES, default="auto",
@@ -36,7 +39,7 @@ def main(argv: list[str] | None = None) -> int:
         if frac >= 1.0:
             print(file=sys.stderr)
 
-    opt = pipeline.Options(name=a.name, language=a.language, gap_fill=a.gap_fill, rvc_model=a.rvc_model, rvc_index=a.rvc_index,
+    opt = pipeline.Options(name=a.name, language=a.language, source_lang=a.source_lang, gap_fill=a.gap_fill, rvc_model=a.rvc_model, rvc_index=a.rvc_index,
                            rvc_command=a.rvc_command, template=a.template,
                            flatten_pitch=not a.no_flatten, min_conf=a.min_conf,
                            validate={"auto": None, "on": True, "off": False}[a.cross_check])

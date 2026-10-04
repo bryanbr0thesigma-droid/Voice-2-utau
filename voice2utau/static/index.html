@@ -66,6 +66,7 @@
   .cell[data-src=recorded] { border-color: var(--rec); } .cell[data-src=rvc] { border-color: var(--rvc); }
   .cell[data-src=template] { border-color: var(--tpl); } .cell[data-src=missing] { color: var(--miss); border-style: dashed; border-color: var(--miss); cursor: default; }
   .grid.en .cell { min-width: 56px; font-size: .85rem; padding: 4px 3px; }
+  .cell[data-lang=de] { text-decoration: underline dotted; text-underline-offset: 3px; }
   .cell:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   .cell.playing { background: color-mix(in srgb, var(--accent) 20%, transparent); }
   ul.warnings { margin: 6px 0 0; padding-left: 20px; }
@@ -90,6 +91,13 @@
     <label for="language">Voicebank type</label>
     <select id="language"></select>
     <p class="hint" id="langHint"></p>
+    <label for="srclang">Language of the recording</label>
+    <select id="srclang">
+      <option value="en">English</option>
+      <option value="de">German (only sounds with a close English match are used)</option>
+    </select>
+    <p class="hint">Zip with several languages? Put files in folders named <code>en/</code> and <code>de/</code> (or add _en / _de to the file name).
+    German is only a fallback: it fills English units that the English lines don't contain.</p>
 
     <h2 style="margin-top:22px">2 · Fill the gaps with RVC</h2>
     <div class="row">
@@ -185,6 +193,7 @@ $("form").onsubmit = async e => {
   fd.append("file", file);
   fd.append("name", $("name").value);
   fd.append("language", $("language").value);
+  fd.append("source_lang", $("srclang").value);
   fd.append("gap_fill", $("gapfill").value);
   fd.append("flatten_pitch", $("flatten").checked);
   fd.append("cross_check", $("validate").value);
@@ -246,6 +255,7 @@ function showResult(j) {
     (j.has_dataset ? `<a class="btn alt" href="/api/jobs/${j.id}/dataset">RVC training dataset (.zip)</a>` : "");
   $("warnings").innerHTML = (r.warnings || []).map(w => `<div class="notice warn">${esc(w)}</div>`).join("");
   const src = Object.fromEntries(r.samples.map(s => [s.key, s.source]));
+  const slang = Object.fromEntries(r.samples.map(s => [s.key, s.lang]));
   const rows = {};
   const lang = r.language || "ja";
   $("grid").className = "grid " + lang;
@@ -253,8 +263,8 @@ function showResult(j) {
   $("grid").innerHTML = Object.values(rows).map(ms =>
     `<div class="grow">${ms.map(m => {
       const s = src[m.key] || "missing";
-      return `<button type="button" class="cell" data-src="${s}" data-key="${m.key}" ${s === "missing" ? "disabled" : ""}
-              title="${m.key} · ${s}">${esc(m.alias)}</button>`; }).join("")}</div>`).join("");
+      return `<button type="button" class="cell" data-src="${s}" data-lang="${slang[m.key] || ""}" data-key="${m.key}" ${s === "missing" ? "disabled" : ""}
+              title="${m.key} · ${s}${slang[m.key] === "de" ? " (German)" : ""}">${esc(m.alias)}</button>`; }).join("")}</div>`).join("");
   $("grid").onclick = e => {
     const b = e.target.closest(".cell"); if (!b || b.disabled) return;
     if (audioEl) audioEl.pause();

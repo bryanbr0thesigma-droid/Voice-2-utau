@@ -17,7 +17,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 
 from . import pipeline, profiles
-from .ingest import AUDIO_EXT, IngestError
+from .ingest import AUDIO_EXT, SOURCE_LANGS, IngestError
 
 log = logging.getLogger("voice2utau")
 
@@ -118,6 +118,7 @@ async def create_job(
     file: UploadFile = File(...),
     name: str = Form("MyVoice"),
     language: str = Form("ja"),
+    source_lang: str = Form("en"),
     gap_fill: str = Form("auto"),
     flatten_pitch: bool = Form(True),
     cross_check: str = Form("auto"),
@@ -129,6 +130,8 @@ async def create_job(
         raise HTTPException(400, f"gap_fill must be one of {pipeline.GAP_FILL_MODES}")
     if language not in profiles.PROFILES:
         raise HTTPException(400, f"language must be one of {sorted(profiles.PROFILES)}")
+    if source_lang not in SOURCE_LANGS:
+        raise HTTPException(400, f"source_lang must be one of {SOURCE_LANGS}")
     if cross_check not in ("auto", "on", "off"):
         raise HTTPException(400, "cross_check must be auto, on or off")
     ext = Path(file.filename or "").suffix.lower()
@@ -140,7 +143,7 @@ async def create_job(
     try:
         upload = jdir / "in" / f"upload{ext}"
         await _save_upload(file, upload, MAX_UPLOAD)
-        opt = pipeline.Options(name=(name.strip() or "MyVoice")[:60], language=language, gap_fill=gap_fill,
+        opt = pipeline.Options(name=(name.strip() or "MyVoice")[:60], language=language, source_lang=source_lang, gap_fill=gap_fill,
                                flatten_pitch=flatten_pitch,
                                validate={"auto": None, "on": True, "off": False}[cross_check])
         if rvc_model is not None and rvc_model.filename:

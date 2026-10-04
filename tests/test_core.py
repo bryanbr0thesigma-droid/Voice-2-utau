@@ -168,3 +168,22 @@ def test_chunking_cuts_in_quiet_gaps():
 
 def test_pick_espeak_voice_tracks_target_pitch():
     assert pick_espeak_voice(100)[0] == "ja" and pick_espeak_voice(230)[0] == "ja+f3"
+
+
+def test_language_tags_from_zip_paths():
+    from voice2utau.ingest import detect_lang
+    assert detect_lang("de/line1.wav") == "de" and detect_lang("lines/cyn_de_004.wav") == "de"
+    assert detect_lang("English/a.mp3") == "en" and detect_lang("Cyn (German) 01.wav") == "de"
+    assert detect_lang("deep/a.wav") is None and detect_lang("lines/design.wav") is None
+
+
+def test_zip_sources_get_language_from_folders(tmp_path):
+    from voice2utau.ingest import prepare_sources
+    wav = tmp_path / "t.wav"
+    audio.write_wav(wav, tone(0.5), SR)
+    with zipfile.ZipFile(tmp_path / "v.zip", "w") as z:
+        z.write(wav, "en/a.wav"); z.write(wav, "de/b.wav"); z.write(wav, "c.wav")
+    got = {s.original: s.lang for s in prepare_sources(tmp_path / "v.zip", tmp_path / "w")}
+    assert got == {"a.wav": "en", "b.wav": "de", "c.wav": "en"}
+    got = {s.original: s.lang for s in prepare_sources(tmp_path / "v.zip", tmp_path / "w2", default_lang="de")}
+    assert got == {"a.wav": "en", "b.wav": "de", "c.wav": "de"}

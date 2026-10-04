@@ -21,7 +21,8 @@ class Profile:
 
 
 PROFILES: dict[str, Profile] = {
-    "ja": Profile("ja", "Japanese – hiragana CV (101 units)", morae.MORAE, extract.build_candidates,
+    "ja": Profile("ja", "Japanese – hiragana CV (101 units)", morae.MORAE,
+                  lambda phones, src, lang="en": extract.build_candidates(phones, src),
                   lambda m: m.cls, "Single-mora hiragana bank: か, きゃ, ん …"),
     "en": Profile("en", f"English – ARPAbet CVVC ({len(english.UNITS)} units)", english.UNITS,
                   english.build_candidates, english.group_of,

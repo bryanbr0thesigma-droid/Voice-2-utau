@@ -24,6 +24,7 @@ class Candidate:
     conf: float
     next_gap: float     # silence/gap between this mora's vowel and the next phone
     score: float = 0.0
+    penalty: float = 0.0   # subtracted from the score (e.g. non-native-language source)
     # filled in by validate.Validator.annotate
     feat: tuple | None = None
     vmargin: float | None = None
@@ -130,7 +131,7 @@ def prescore(c: Candidate) -> float:
         return -1.0
     dur = 0.25 if 0.16 <= d <= 0.45 else 0.10
     isolated = 0.10 if c.next_gap >= 0.03 else -0.05
-    return c.conf + dur + isolated
+    return c.conf + dur + isolated - c.penalty
 
 
 def cut_clip(c: Candidate, wav44: Path) -> Clip | None:
@@ -188,7 +189,7 @@ def select_best(cands: list[Candidate], wavs: dict[str, Path], min_conf: float =
                 top_k: int = 6, validator=None) -> dict[str, Clip]:
     if validator is not None:
         validator.annotate(cands)
-    options: dict[str, list[tuple[float, Clip]]] = {}
+    options: dict[str, list[tuple[float, Clip, bool]]] = {}
     for key, cs in rank_candidates(cands, min_conf, validator).items():
         for c in cs[:top_k]:
             clip = cut_clip(c, wavs[c.src])
@@ -198,15 +199,21 @@ def select_best(cands: list[Candidate], wavs: dict[str, Path], min_conf: float =
             if ok <= 0:
                 continue
             options.setdefault(key, []).append(
-                ((validator.rank_score(c) if validator is not None else c.score) * ok, clip))
+                ((validator.rank_score(c) if validator is not None else c.score) * ok, clip, c.penalty > 0))
     # Prefer clips near the speaker's typical pitch: they need little PSOLA shifting when flattened.
-    f0s = [clip.f0 for opts in options.values() for _, clip in opts if clip.f0]
+    f0s = [clip.f0 for opts in options.values() for _, clip, _ in opts if clip.f0]
     median = float(np.median(f0s)) if f0s else None
 
-    def adjusted(opt: tuple[float, Clip]) -> float:
-        total, clip = opt
+    def adjusted(opt: tuple[float, Clip, bool]) -> float:
+        total, clip, _ = opt
         if median and clip.f0:
             total -= PITCH_WEIGHT * min(12.0, abs(12 * np.log2(clip.f0 / median)))
         return total
 
-    return {key: max(opts, key=adjusted)[1] for key, opts in options.items()}
+    # A recording in a secondary language (e.g. German for an English bank) is only a fallback:
+    # it is used for a unit only when no native-language candidate survived.
+    def pick(opts):
+        native = [o for o in opts if not o[2]]
+        return max(native or opts, key=adjusted)[1]
+
+    return {key: pick(opts) for key, opts in options.items()}

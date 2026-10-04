@@ -59,6 +59,23 @@ def safe_extract_zip(zip_path: Path, dest: Path, allowed_ext: set[str] | None = 
     return out
 
 
+SOURCE_LANGS = ("en", "de")
+_LANG_WORDS = {"en": {"en", "eng", "english", "enus", "en-us", "en-gb"},
+               "de": {"de", "ger", "deu", "german", "deutsch", "de-de"}}
+
+
+def detect_lang(rel_path: str) -> str | None:
+    """Language tag from a zip member path: a folder (`de/line1.wav`) or a file-name token (`line1_de.wav`)."""
+    import re
+    parts = Path(rel_path.replace("\\", "/")).parts
+    tokens = [t.lower() for t in parts[:-1]]
+    tokens += re.split(r"[\s_.\-()\[\]]+", Path(parts[-1]).stem.lower())
+    for lang, words in _LANG_WORDS.items():
+        if any(t in words for t in tokens):
+            return lang
+    return None
+
+
 @dataclass
 class Source:
     id: str
@@ -66,14 +83,16 @@ class Source:
     wav44: Path
     wav16: Path
     seconds: float
+    lang: str = "en"          # language spoken in this file (selects which sounds may be used)
 
 
-def prepare_sources(upload: Path, work: Path, progress=None) -> list[Source]:
+def prepare_sources(upload: Path, work: Path, progress=None, default_lang: str = "en") -> list[Source]:
     """Extract (if zip) and decode every audio file to 44.1 kHz and 16 kHz mono wavs."""
     work.mkdir(parents=True, exist_ok=True)
     if upload.suffix.lower() == ".zip":
         files = [p for p in safe_extract_zip(upload, work / "raw", AUDIO_EXT)]
         files.sort()
+        raw_root = (work / "raw").resolve()
         if not files:
             raise IngestError("the zip does not contain any audio files "
                               f"(supported: {', '.join(sorted(AUDIO_EXT))})")
@@ -81,6 +100,8 @@ def prepare_sources(upload: Path, work: Path, progress=None) -> list[Source]:
         if upload.suffix.lower() not in AUDIO_EXT:
             raise IngestError(f"unsupported file type {upload.suffix!r}; upload a .zip or an audio file")
         files = [upload]
+    if default_lang not in SOURCE_LANGS:
+        raise IngestError(f"source language must be one of {SOURCE_LANGS}")
     sources: list[Source] = []
     for i, f in enumerate(files):
         sid = f"{i:04d}"
@@ -95,7 +116,10 @@ def prepare_sources(upload: Path, work: Path, progress=None) -> list[Source]:
         secs = audio.duration(w44)
         if secs < 0.2:
             continue
-        sources.append(Source(sid, f.name, w44, w16, secs))
+        lang = default_lang
+        if upload.suffix.lower() == ".zip":
+            lang = detect_lang(str(f.resolve().relative_to(raw_root))) or default_lang
+        sources.append(Source(sid, f.name, w44, w16, secs, lang))
         if progress:
             progress((i + 1) / len(files))
     if not sources:

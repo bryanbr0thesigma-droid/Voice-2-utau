@@ -83,10 +83,42 @@ def classify(sym: str) -> Sym:
     return Sym("X")
 
 
+# German recordings: only sounds with a close English counterpart are accepted. German /ʁ/, /x/, /ç/,
+# /ts/, /pf/, /y/, /ʏ/, /ø/, /œ/ and the pure (monophthong) tense /e:/ /o:/ are deliberately dropped:
+# put under an English label they would be audibly wrong.
+_DE_VOWEL = {"ɪ": "ih", "i": "iy", "ʊ": "uh", "u": "uw", "ɛ": "eh", "ɔ": "ao", "a": "aa", "ä": "aa",
+             "ɑ": "aa", "ə": "ah", "ɐ": "ah"}
+_DE_DIPH = {"aɪ": "ay", "ai": "ay", "aʊ": "aw", "au": "aw", "ɔʏ": "oy", "ɔɪ": "oy"}
+_DE_CONS = {"p": "p", "b": "b", "t": "t", "d": "d", "k": "k", "ɡ": "g", "g": "g", "f": "f", "v": "v",
+            "s": "s", "z": "z", "ʃ": "sh", "ʒ": "zh", "h": "hh", "m": "m", "n": "n", "ŋ": "ng", "l": "l",
+            "j": "y", "tʃ": "ch", "dʒ": "jh"}
+DE_PENALTY = 0.10      # English takes win unless the German one is clearly better
+
+
+def classify_de(sym: str) -> Sym:
+    """IPA token from a German recording -> English unit sound, or Sym('X') if there is no close match."""
+    if sym in _DE_DIPH:
+        return Sym("V", _DE_DIPH[sym])
+    if sym in _DE_CONS:
+        return Sym("C", _DE_CONS[sym])
+    base = _STRIP.sub("", sym.replace("ʲ", ""))
+    if base in _DE_DIPH:
+        return Sym("V", _DE_DIPH[base])
+    if base in _DE_CONS:
+        return Sym("C", _DE_CONS[base])
+    if base in _DE_VOWEL:
+        return Sym("V", _DE_VOWEL[base])
+    return Sym("X")
+
+
+CLASSIFIERS = {"en": classify, "de": classify_de}
+
+
 # --------------------------------------------------------------------- candidates
 
-def build_candidates(phones: list[Phone], src: str) -> list[Candidate]:
-    syms = [classify(p.sym) for p in phones]
+def build_candidates(phones: list[Phone], src: str, source_lang: str = "en") -> list[Candidate]:
+    classifier = CLASSIFIERS[source_lang]
+    syms = [classifier(p.sym) for p in phones]
     n = len(phones)
     out: list[Candidate] = []
 
@@ -128,6 +160,7 @@ def build_candidates(phones: list[Phone], src: str) -> list[Candidate]:
                 out.append(Candidate(UNITS[key], src, st, cp.end + tr, split, conf, g))
     for c in out:
         c.start = max(0.0, c.start)
+        c.penalty = 0.0 if source_lang == "en" else DE_PENALTY
         c.score = prescore(c)
     return out
 

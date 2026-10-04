@@ -57,6 +57,7 @@ def test_full_job_cycle(client):
     ({"file": ("evil.exe", b"x")}, {}, 400),
     ({"file": ("v.zip", b"x")}, {"gap_fill": "bogus"}, 400),
     ({"file": ("v.zip", b"x")}, {"language": "fr"}, 400),
+    ({"file": ("v.zip", b"x")}, {"source_lang": "fr"}, 400),
     ({"file": ("v.zip", b"x")}, {"cross_check": "maybe"}, 400),
     ({"file": ("v.zip", b"x"), "rvc_model": ("m.bin", b"x")}, {}, 400),
     ({"file": ("v.zip", b"x"), "template": ("t.rar", b"x")}, {}, 400),

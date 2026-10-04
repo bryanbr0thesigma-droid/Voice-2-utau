@@ -9,6 +9,11 @@ from voice2utau.templates import EspeakTemplate, alias_to_mora, estimate_split, 
 SR = audio.SR_BANK
 
 
+def tone(dur=0.3, f=200.0, amp=0.3):
+    t = np.arange(int(SR * dur)) / SR
+    return (amp * np.sin(2 * np.pi * f * t)).astype(np.float32)
+
+
 def test_inventory_shape():
     u = english.UNITS
     kinds = {k: sum(m.kind == k for m in u.values()) for k in ("CV", "VC", "V")}
@@ -94,3 +99,34 @@ def test_profiles():
     with pytest.raises(pipeline.PipelineError):
         pipeline.run(__import__("pathlib").Path("x.mp3"), __import__("pathlib").Path("/tmp/v2u_w"),
                      __import__("pathlib").Path("/tmp/v2u_o"), pipeline.Options(language="fr"))
+
+
+# ---- German as a fallback source ------------------------------------------------------------------
+def test_german_mapping_keeps_close_sounds_and_drops_the_rest():
+    ok = {"ɪ": "ih", "iː": "iy", "ʊ": "uh", "ɛ": "eh", "aɪ": "ay", "aʊ": "aw", "ɔʏ": "oy", "ʃ": "sh", "ŋ": "ng"}
+    for ipa, arpa in ok.items():
+        assert english.classify_de(ipa).value == arpa, ipa
+    for ipa in ("ʁ", "x", "ç", "ts", "pf", "y", "ʏ", "ø", "œ", "eː", "oː"):       # no honest English equivalent
+        assert english.classify_de(ipa).kind == "X", ipa
+
+
+def test_german_candidates_are_marked_as_fallback():
+    ph = [Phone("ʃ", 1.0, 1.05, .9), Phone("ɪ", 1.08, 1.16, .9), Phone("ʁ", 1.2, 1.25, .9)]
+    de = english.build_candidates(ph, "s", "de")
+    assert [c.mora.key for c in de] == ["cv_sh_ih"] and de[0].penalty > 0   # ʁ dropped: no vc_ih_r
+    assert english.build_candidates(ph, "s", "en")[0].penalty == 0
+
+
+def test_native_recording_always_beats_german(tmp_path):
+    from voice2utau import extract
+    key = "cv_k_ae"
+    x = np.concatenate([tone(0.3, 200, .3)] * 2)
+    wavs = {"en": tmp_path / "en.wav", "de": tmp_path / "de.wav"}
+    for p in wavs.values():
+        audio.write_wav(p, np.concatenate([np.zeros(SR // 2, np.float32), x, np.zeros(SR // 2, np.float32)]), SR)
+    mk = lambda src, conf, pen: extract.Candidate(english.UNITS[key], src, 0.4, 0.8, 0.5, conf, 0.2, 1.0 + conf, pen)
+    # German has far higher confidence, yet the English take must win
+    got = extract.select_best([mk("en", .72, 0.0), mk("de", .99, 0.1)], wavs, min_conf=.7)
+    assert got[key].origin == "en"
+    # ... and German is used when there is no English candidate
+    assert extract.select_best([mk("de", .9, 0.1)], wavs, min_conf=.7)[key].origin == "de"

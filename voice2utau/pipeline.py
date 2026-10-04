@@ -12,7 +12,7 @@ import numpy as np
 
 from . import audio, bank, profiles, rvc
 from .extract import Clip, select_best
-from .ingest import Source, prepare_sources
+from .ingest import IngestError, Source, prepare_sources
 from .validate import Validator
 from .templates import EspeakTemplate, TemplateError, VoicebankTemplate
 
@@ -27,6 +27,7 @@ class PipelineError(RuntimeError):
 @dataclass
 class Options:
     name: str = "MyVoice"
+    source_lang: str = "en"           # language of the recording(s); zip folders/file names tagged de/en override it
     language: str = "ja"             # ja = hiragana CV bank, en = English ARPAbet CVVC bank
     gap_fill: str = "auto"            # auto | rvc | template | none
     rvc_model: Path | None = None
@@ -108,7 +109,11 @@ def run(upload: Path, work: Path, out_dir: Path, opt: Options,
 
     # 1. ingest ------------------------------------------------------------------
     P("ingest", 0.0, "Decoding audio…")
-    sources = prepare_sources(upload, work / "audio", lambda f: P("ingest", f, "Decoding audio…"))
+    try:
+        sources = prepare_sources(upload, work / "audio", lambda f: P("ingest", f, "Decoding audio…"),
+                                  opt.source_lang)
+    except IngestError as e:
+        raise PipelineError(str(e)) from e
     total_s = sum(s.seconds for s in sources)
     P("ingest", 1.0, f"{len(sources)} file(s), {total_s / 60:.1f} min of audio")
 
@@ -122,7 +127,7 @@ def run(upload: Path, work: Path, out_dir: Path, opt: Options,
             s.wav16, lambda f, si=si: P("recognise", (si + f) / len(sources),
                                         f"Listening… file {si + 1}/{len(sources)}"))
         n_phones += len(phones)
-        cands += prof.build_candidates(phones, s.id)
+        cands += prof.build_candidates(phones, s.id, s.lang)
     P("recognise", 1.0, f"{n_phones} phonemes, {len(cands)} mora candidates")
 
     # 3. choose the best recording of every mora ---------------------------------
@@ -217,6 +222,7 @@ def run(upload: Path, work: Path, out_dir: Path, opt: Options,
 
     # 6. write -------------------------------------------------------------------
     P("write", 0.0, "Writing voicebank…")
+    lang_of = {s.id: s.lang for s in sources}
     report = {
         "name": opt.name,
         "language": prof.code,
@@ -230,10 +236,11 @@ def run(upload: Path, work: Path, out_dir: Path, opt: Options,
         "settings": {"min_confidence": min_conf, "cross_check": validate},
         "rvc_transpose": transpose if mode in ("rvc", "auto") and any(c.source == "rvc" for c in clips.values()) else None,
         "template": template_info,
-        "sources": [{"file": s.original, "seconds": round(s.seconds, 1)} for s in sources],
+        "sources": [{"file": s.original, "seconds": round(s.seconds, 1), "lang": s.lang} for s in sources],
         "samples": [{"key": k, "alias": c.mora.kana, "source": c.source, "confidence": round(c.conf, 2),
                      "f0_hz": round(c.f0, 1) if c.f0 else None,
-                     "duration_ms": round(len(c.audio) / audio.SR_BANK * 1000)}
+                     "duration_ms": round(len(c.audio) / audio.SR_BANK * 1000),
+                     "lang": lang_of.get(c.origin, opt.source_lang) if c.source == "recorded" else None}
                     for k, c in clips.items()],
         "missing": [{"key": k, "alias": units[k].kana} for k in units if k not in clips],
         "warnings": warnings,
