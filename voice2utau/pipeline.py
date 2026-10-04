@@ -11,7 +11,8 @@ from typing import Callable
 import numpy as np
 
 from . import audio, bank, profiles, rvc
-from .extract import Clip, select_best
+from .corpus import Corpus, CorpusError, file_sha1
+from .extract import Clip, choose, collect_options
 from .ingest import IngestError, Source, prepare_sources
 from .validate import Validator
 from .templates import EspeakTemplate, TemplateError, VoicebankTemplate
@@ -35,6 +36,7 @@ class Options:
     rvc_command: str | None = None
     template: Path | None = None      # custom UTAU bank (.zip / folder); default = espeak-ng
     flatten_pitch: bool = True
+    state_dir: Path | None = None     # accumulate the best clips across several uploads in this directory
     min_conf: float | None = None     # None = language default
     validate: bool | None = None      # cross-check labels against the speaker's other recordings; None = language default
 
@@ -135,13 +137,36 @@ def run(upload: Path, work: Path, out_dir: Path, opt: Options,
     P("select", 0.0, "Picking the cleanest sample for each mora…")
     wavs = {s.id: s.wav44 for s in sources}
     validator = Validator({s.id: s.wav16 for s in sources}) if validate else None
-    clips: dict[str, Clip] = select_best(cands, wavs, min_conf, validator=validator)
+    options = collect_options(cands, wavs, min_conf, top_k=12, validator=validator)
+    name_of = {s.id: s.original for s in sources}
+    upload_tag = file_sha1(upload)[:10]
+    for opts in options.values():
+        for o in opts:
+            o.clip.meta["lang"] = lang_of.get(o.clip.origin)
+            o.clip.meta["file"] = name_of.get(o.clip.origin)
+            o.clip.origin = f"{upload_tag}:{o.clip.origin}"
+    corpus_info = None
+    if opt.state_dir:
+        try:
+            corpus = Corpus.load(opt.state_dir, prof.code, units)
+        except CorpusError as e:
+            raise PipelineError(str(e)) from e
+        sha = file_sha1(upload)
+        if corpus.has_upload(sha):
+            warnings.append("this exact upload was already added to the state directory; it was not added twice")
+        else:
+            corpus.add(options, {"sha1": sha, "name": upload.name, "files": len(sources),
+                                 "seconds": round(total_s, 1), "lang": opt.source_lang})
+            corpus.save()
+        options = corpus.options
+        corpus_info = corpus.stats()
+    clips: dict[str, Clip] = choose(options)
     recorded = len(clips)
     P("select", 1.0, f"{recorded}/{len(units)} units found in the recording")
     native = prof.native_lang
 
     def is_fallback(c: Clip) -> bool:
-        return bool(native) and c.source == "recorded" and lang_of.get(c.origin, native) not in (native, "mixed")
+        return bool(native) and c.source == "recorded" and (c.meta.get("lang") or native) not in (native, "mixed")
     ref_f0 = [c.f0 for c in clips.values() if c.f0 and not is_fallback(c)] or [c.f0 for c in clips.values() if c.f0]
     target_f0 = float(np.median(ref_f0)) if ref_f0 else None
     if target_f0 is None:
@@ -221,7 +246,7 @@ def run(upload: Path, work: Path, out_dir: Path, opt: Options,
             clips[c.mora.key] = c
         converted_fallback = sum(c.source == "rvc" for c in conv)
         warnings += w
-        warnings.append(f"{converted_fallback} clip(s) from {', '.join(sorted({lang_of[c.origin] for c in fallback}))} "
+        warnings.append(f"{converted_fallback} clip(s) from {', '.join(sorted({str(c.meta.get('lang')) for c in fallback}))} "
                         "lines were converted with your RVC model so they match the main voice.")
     elif fallback:
         warnings.append(f"{len(fallback)} clip(s) come from fallback-language lines (a different voice actor) and were NOT "
@@ -262,13 +287,14 @@ def run(upload: Path, work: Path, out_dir: Path, opt: Options,
                    "missing": len(units) - len(clips)},
         "gap_fill_mode": mode,
         "settings": {"min_confidence": min_conf, "cross_check": validate},
+        "corpus": corpus_info,
         "rvc_transpose": transpose if mode in ("rvc", "auto") and any(c.source == "rvc" for c in clips.values()) else None,
         "template": template_info,
         "sources": [{"file": s.original, "seconds": round(s.seconds, 1), "lang": s.lang} for s in sources],
         "samples": [{"key": k, "alias": c.mora.kana, "source": c.source, "confidence": round(c.conf, 2),
                      "f0_hz": round(c.f0, 1) if c.f0 else None,
                      "duration_ms": round(len(c.audio) / audio.SR_BANK * 1000),
-                     "lang": lang_of.get(c.origin)}
+                     "lang": c.meta.get("lang"), "file": c.meta.get("file")}
                     for k, c in clips.items()],
         "missing": [{"key": k, "alias": units[k].kana} for k in units if k not in clips],
         "warnings": warnings,

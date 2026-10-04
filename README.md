@@ -98,6 +98,18 @@ python -m voice2utau long.mp3  --name MyChar --gap-fill none        # recorded m
 Output: `<name>_utau.zip` containing the wavs, `oto.ini` (Shift-JIS), `character.txt` and
 `voice2utau_report.json` (which sample is a recording / RVC / raw template, confidence, pitch).
 
+### Big corpora: feed several zips, one at a time
+
+```bash
+python -m voice2utau zip1.zip --language en --name MyChar --gap-fill none --state mychar_state -o out
+python -m voice2utau zip2.zip --language en --name MyChar --gap-fill none --state mychar_state -o out   # adds to zip1
+```
+Each run keeps the best 12 clips per unit in `--state` and rebuilds the bank from everything seen so far, so a better
+take in zip 3 replaces a worse one from zip 1, and you can test the bank after every zip. Sending the same zip twice is
+detected and ignored. Selection prefers calm, steady-pitch takes near the speaker's usual pitch. The report shows
+`coverage.speech_covered_by_recordings` (share of everyday English covered by real recordings) and the most-needed missing units.
+(Measured on LJSpeech: 50 lines → 210 units / 73 % of speech; 100 lines → 263 units / 79 %.)
+
 ### Gap-fill modes
 
 | mode | behaviour |

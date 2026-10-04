@@ -32,6 +32,9 @@ def main(argv: list[str] | None = None) -> int:
                     help="acoustic cross-validation of phoneme labels (auto: on for ja, off for en)")
     ap.add_argument("--min-conf", type=float, default=None,
                     help="minimum phoneme confidence 0-1 (default: 0.45 for ja, 0.7 for en)")
+    ap.add_argument("--state", type=Path,
+                    help="directory that accumulates the best clips across several uploads: run once per zip "
+                         "with the same --state and every run rebuilds the bank from everything seen so far")
     ap.add_argument("--work", type=Path, help="working directory (default: temporary)")
     a = ap.parse_args(argv)
 
@@ -42,7 +45,7 @@ def main(argv: list[str] | None = None) -> int:
 
     opt = pipeline.Options(name=a.name, language=a.language, source_lang=a.source_lang, gap_fill=a.gap_fill, rvc_model=a.rvc_model, rvc_index=a.rvc_index,
                            rvc_command=a.rvc_command, template=a.template,
-                           flatten_pitch=not a.no_flatten, min_conf=a.min_conf,
+                           flatten_pitch=not a.no_flatten, state_dir=a.state, min_conf=a.min_conf,
                            validate={"auto": None, "on": True, "off": False}[a.cross_check])
     try:
         with tempfile.TemporaryDirectory() as td:

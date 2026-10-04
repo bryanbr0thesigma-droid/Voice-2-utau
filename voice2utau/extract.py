@@ -152,7 +152,17 @@ def cut_clip(c: Candidate, wav44: Path) -> Clip | None:
         return None
     voiced_part = seg[: 2 * len(seg) // 3] if c.mora.kind == "VC" else seg[len(seg) // 3:]
     f0 = audio.median_f0(voiced_part, sr)
-    return Clip(c.mora, seg, split, f0, "recorded", c.conf, c.src)
+    return Clip(c.mora, seg, split, f0, "recorded", c.conf, c.src, {"f0_std": f0_std_semitones(voiced_part, sr)})
+
+
+def f0_std_semitones(x: np.ndarray, sr: int) -> float | None:
+    """How much the pitch moves inside a clip (semitones, std). Calm, steady takes make better bank samples."""
+    try:
+        _, f0 = audio.f0_track(x, sr)
+    except Exception:
+        return None
+    v = f0[f0 > 0]
+    return float(np.std(12 * np.log2(v / np.median(v)))) if len(v) >= 6 else None
 
 
 def acoustic_ok(clip: Clip, sr: int = audio.SR_BANK) -> float:
@@ -182,14 +192,24 @@ def rank_candidates(cands: list[Candidate], min_conf: float = 0.45, validator=No
     return by_key
 
 
-PITCH_WEIGHT = 0.04     # score lost per semitone away from the speaker's median pitch (capped at 12)
+PITCH_WEIGHT = 0.04       # score lost per semitone away from the speaker's median pitch (capped at 12)
+STABILITY_WEIGHT = 0.03   # score lost per semitone of pitch movement inside the clip (capped at 6)
 
 
-def select_best(cands: list[Candidate], wavs: dict[str, Path], min_conf: float = 0.45,
-                top_k: int = 6, validator=None) -> dict[str, Clip]:
+@dataclass
+class Option:
+    """A cut-out clip that could represent a unit, with its pre-selection score."""
+    total: float
+    clip: Clip
+    foreign: bool = False    # recorded in a secondary language (fallback only)
+
+
+def collect_options(cands: list[Candidate], wavs: dict[str, Path], min_conf: float = 0.45,
+                    top_k: int = 6, validator=None) -> dict[str, list[Option]]:
+    """Cut the best `top_k` candidates of every unit out of the sources."""
     if validator is not None:
         validator.annotate(cands)
-    options: dict[str, list[tuple[float, Clip, bool]]] = {}
+    options: dict[str, list[Option]] = {}
     for key, cs in rank_candidates(cands, min_conf, validator).items():
         for c in cs[:top_k]:
             clip = cut_clip(c, wavs[c.src])
@@ -198,22 +218,43 @@ def select_best(cands: list[Candidate], wavs: dict[str, Path], min_conf: float =
             ok = acoustic_ok(clip)
             if ok <= 0:
                 continue
-            options.setdefault(key, []).append(
-                ((validator.rank_score(c) if validator is not None else c.score) * ok, clip, c.penalty > 0))
-    # Prefer clips near the speaker's typical pitch: they need little PSOLA shifting when flattened.
-    f0s = [clip.f0 for opts in options.values() for _, clip, _ in opts if clip.f0]
+            total = (validator.rank_score(c) if validator is not None else c.score) * ok
+            options.setdefault(key, []).append(Option(total, clip, c.penalty > 0))
+    return options
+
+
+def scorer(options: dict[str, list[Option]]):
+    """Score function used to rank options (also used to decide which options a corpus keeps)."""
+    f0s = [o.clip.f0 for opts in options.values() for o in opts if o.clip.f0]
     median = float(np.median(f0s)) if f0s else None
 
-    def adjusted(opt: tuple[float, Clip, bool]) -> float:
-        total, clip, _ = opt
-        if median and clip.f0:
-            total -= PITCH_WEIGHT * min(12.0, abs(12 * np.log2(clip.f0 / median)))
+    def adjusted(o: Option) -> float:
+        total = o.total
+        if median and o.clip.f0:
+            total -= PITCH_WEIGHT * min(12.0, abs(12 * np.log2(o.clip.f0 / median)))
+        std = o.clip.meta.get("f0_std")
+        if std is not None:
+            total -= STABILITY_WEIGHT * min(6.0, std)
         return total
+    return adjusted
 
-    # A recording in a secondary language (e.g. German for an English bank) is only a fallback:
-    # it is used for a unit only when no native-language candidate survived.
-    def pick(opts):
-        native = [o for o in opts if not o[2]]
-        return max(native or opts, key=adjusted)[1]
 
-    return {key: pick(opts) for key, opts in options.items()}
+def choose(options: dict[str, list[Option]]) -> dict[str, Clip]:
+    """Pick one clip per unit.
+
+    Prefers clips near the speaker's typical pitch (little PSOLA shifting when flattened) and with
+    steady pitch inside the clip. A recording in a secondary language (e.g. German for an English bank)
+    is only a fallback: it is used for a unit only when no native-language candidate survived.
+    """
+    adjusted = scorer(options)
+
+    def pick(opts: list[Option]) -> Clip:
+        native = [o for o in opts if not o.foreign]
+        return max(native or opts, key=adjusted).clip
+
+    return {key: pick(opts) for key, opts in options.items() if opts}
+
+
+def select_best(cands: list[Candidate], wavs: dict[str, Path], min_conf: float = 0.45,
+                top_k: int = 6, validator=None) -> dict[str, Clip]:
+    return choose(collect_options(cands, wavs, min_conf, top_k, validator))
