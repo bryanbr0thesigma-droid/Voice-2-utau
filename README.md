@@ -117,6 +117,17 @@ voice are written to `<out>/speaker_previews/voice_N.wav` so you can pick the ri
 voice's file count and pitch. With `--state`, the fitted voices are stored, so later zips are assigned to the same ones.
 (The Minecraft villager pack separated into ~3 voices at about 237 / 335 / 444 Hz; silhouette 0.30 vs 0.001 for random labels.)
 
+### Extra languages on an English bank (no RVC)
+
+```bash
+python -m voice2utau.crossling output/Villager -o output --name VLGR   # + Japanese (hiragana & romaji), 101 sounds
+python -m voice2utau.mandarin  output/VLGR                             # + Mandarin (plain pinyin), 413 syllables, in place
+```
+Both reuse the English recordings (so they carry the English accent): sounds point at the closest English unit, and
+sounds with no English unit are spliced from existing clips (`ja_*.wav`, `zh_*.wav`). Tables to tune are at the top of
+`crossling.py` / `mandarin.py`. Where a plain spelling is both a pinyin syllable and a Japanese romaji alias with a different
+sound (shi, chi, ru, za, ju …), pinyin wins; the Japanese sound stays available by its hiragana name.
+
 ### Gap-fill modes
 
 | mode | behaviour |

@@ -91,6 +91,37 @@ class Mapper:
         pre = min(pre, dur * 0.6)
         return y, [0.0, min(pre + 45, dur - 10), -dur, pre, max(5.0, pre / 3)]
 
+    def build(self, spec: list[tuple[str, str]]) -> tuple[np.ndarray, list[float]]:
+        """Join pieces of existing clips. spec = [(unit key, mode)], mode: 'cons' (up to the vowel onset),
+        'full', or 'tail' (from just before the consonant that follows a vowel). Pieces are crossfaded;
+        preutterance = every 'cons' piece + the consonant length of the first 'full' piece."""
+        segs, pre, seen_full = [], 0.0, False
+        for key, mode in spec:
+            x, sr = self.wav(key)
+            p = self.oto[key][1][3]                          # preutterance of that clip, ms
+            if mode == "cons":
+                seg = x[: max(int(sr * 0.015), int(sr * p / 1000))]
+                pre += len(seg) / sr * 1000 - XFADE_MS
+            elif mode == "tail":
+                seg = x[max(0, int(sr * (p - 20) / 1000)):]
+            else:
+                seg = x
+                if not seen_full:
+                    pre += p
+                    seen_full = True
+            segs.append(seg)
+        n = int(sr * XFADE_MS / 1000)
+        y = segs[0]
+        for seg in segs[1:]:
+            if len(y) > n and len(seg) > n:
+                fade = np.linspace(0, 1, n, dtype=np.float32)
+                y = np.concatenate([y[:-n], y[-n:] * (1 - fade) + seg[:n] * fade, seg[n:]])
+            else:
+                y = np.concatenate([y, seg])
+        dur = len(y) / sr * 1000
+        pre = max(15.0, min(pre, dur * 0.6))
+        return y, [0.0, min(pre + 45, dur - 10), -dur, pre, max(5.0, pre / 3)]
+
     def nasal_tail(self, key: str) -> tuple[np.ndarray, list[float]]:
         """ん: the nasal part of a vowel+n unit."""
         x, sr = self.wav(key)
