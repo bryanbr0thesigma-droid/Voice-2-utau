@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voice → UTAU</title>
+<link rel="icon" href="data:,">
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --ink: #1c2230; --muted: #626b7f; --line: #dfe3ea;
+    --accent: #4f46e5; --accent-ink: #ffffff;
+    --rec: #1f9d6b; --rvc: #2f6fdd; --tpl: #c98a0a; --miss: #9aa3b5;
+    --warn-bg: #fff6e0; --warn-ink: #6b4a00; --err-bg: #fde8e8; --err-ink: #8a1c1c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151c; --card: #1b2029; --ink: #e7eaf1; --muted: #98a1b5; --line: #2b3240;
+      --accent: #7c75ff; --accent-ink: #12151c;
+      --rec: #38c58d; --rvc: #6a9bff; --tpl: #e0a63a; --miss: #5d6679;
+      --warn-bg: #3a2f12; --warn-ink: #f2d899; --err-bg: #3d1d1d; --err-ink: #f4b4b4;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans JP", sans-serif; }
+  main { max-width: 860px; margin: 0 auto; padding: 24px 16px 64px; }
+  h1 { font-size: 1.6rem; margin: 0 0 4px; }
+  h2 { font-size: 1.05rem; margin: 0 0 12px; }
+  .sub { color: var(--muted); margin: 0 0 24px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 18px; margin-bottom: 16px; }
+  label { display: block; font-weight: 600; margin: 14px 0 4px; }
+  .hint { color: var(--muted); font-size: .88rem; margin: 2px 0 0; font-weight: 400; }
+  input[type=text], select { width: 100%; padding: 9px 10px; border-radius: 8px; border: 1px solid var(--line);
+         background: var(--bg); color: var(--ink); font: inherit; }
+  input[type=file] { width: 100%; font: inherit; color: var(--muted); }
+  .drop { border: 2px dashed var(--line); border-radius: 12px; padding: 28px 16px; text-align: center; color: var(--muted);
+          cursor: pointer; transition: border-color .15s, background .15s; }
+  .drop.over, .drop:focus-visible { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); outline: none; }
+  .drop strong { color: var(--ink); display: block; font-size: 1.05rem; }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media (max-width: 560px) { .row { grid-template-columns: 1fr; } }
+  button.primary { background: var(--accent); color: var(--accent-ink); border: 0; border-radius: 10px; padding: 12px 22px;
+          font: inherit; font-weight: 600; cursor: pointer; }
+  button.primary:disabled { opacity: .45; cursor: not-allowed; }
+  a.btn { display: inline-block; text-decoration: none; background: var(--accent); color: var(--accent-ink);
+          border-radius: 10px; padding: 10px 18px; font-weight: 600; margin: 4px 8px 4px 0; }
+  a.btn.alt { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+  .status { font-size: .9rem; padding: 8px 10px; border-radius: 8px; background: var(--bg); margin-top: 8px; color: var(--muted); }
+  .status b { color: var(--ink); }
+  details { margin-top: 12px; } summary { cursor: pointer; font-weight: 600; }
+  .bar { height: 10px; border-radius: 99px; background: var(--line); overflow: hidden; margin: 12px 0 8px; }
+  .bar > div { height: 100%; width: 0; background: var(--accent); transition: width .4s; }
+  .stages { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+  .chip { font-size: .8rem; padding: 2px 10px; border-radius: 99px; border: 1px solid var(--line); color: var(--muted); }
+  .chip.on { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+  .chip.done { background: var(--line); }
+  .notice { padding: 10px 12px; border-radius: 8px; margin: 10px 0; font-size: .92rem; }
+  .notice.warn { background: var(--warn-bg); color: var(--warn-ink); }
+  .notice.err { background: var(--err-bg); color: var(--err-ink); }
+  .counts { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 4px 0 12px; }
+  .dot { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: baseline; }
+  .grid { display: grid; gap: 4px 12px; }
+  .grow { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+  .cell { min-width: 44px; padding: 6px 4px; border-radius: 8px; border: 1px solid transparent; background: var(--bg); color: var(--ink);
+          font: inherit; font-size: .95rem; cursor: pointer; text-align: center; }
+  .cell[data-src=recorded] { border-color: var(--rec); } .cell[data-src=rvc] { border-color: var(--rvc); }
+  .cell[data-src=template] { border-color: var(--tpl); } .cell[data-src=missing] { color: var(--miss); border-style: dashed; border-color: var(--miss); cursor: default; }
+  .cell:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .cell.playing { background: color-mix(in srgb, var(--accent) 20%, transparent); }
+  ul.warnings { margin: 6px 0 0; padding-left: 20px; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Voice → UTAU</h1>
+  <p class="sub">Upload a zip of voice lines or one long recording. Morae found in the recording are cut out as they are;
+  missing ones come from a template and are converted by your RVC model.</p>
+
+  <form id="form" class="card" autocomplete="off">
+    <h2>1 · The voice</h2>
+    <div id="drop" class="drop" tabindex="0" role="button" aria-label="Choose a zip or audio file">
+      <strong id="dropTitle">Drop a .zip or an audio file here</strong>
+      <span id="dropSub">or click to browse · mp3, wav, flac, ogg, m4a … up to <span id="maxmb">2048</span> MB</span>
+    </div>
+    <input id="file" type="file" class="hidden" accept=".zip,audio/*,video/mp4,video/webm,.mkv">
+    <label for="name">Voicebank name</label>
+    <input id="name" type="text" value="MyVoice" maxlength="60">
+
+    <h2 style="margin-top:22px">2 · Fill the gaps with RVC</h2>
+    <div class="row">
+      <div>
+        <label for="model">RVC model of the character (.pth)</label>
+        <input id="model" type="file" accept=".pth">
+      </div>
+      <div>
+        <label for="index">RVC index (.index, optional)</label>
+        <input id="index" type="file" accept=".index">
+      </div>
+    </div>
+    <div id="engine" class="status"></div>
+
+    <details>
+      <summary>Advanced</summary>
+      <label for="gapfill">When morae are missing</label>
+      <select id="gapfill">
+        <option value="auto">Auto – use RVC if a model is given, otherwise leave them out</option>
+        <option value="rvc">RVC – template converted by the model (model required)</option>
+        <option value="template">Template only – NOT in the target voice (preview)</option>
+        <option value="none">Leave gaps</option>
+      </select>
+      <label for="template">Custom UTAU template (.zip, optional)</label>
+      <input id="template" type="file" accept=".zip">
+      <p class="hint">Default template: generated locally with espeak-ng. If you use someone else's voicebank, check its terms of use first.</p>
+      <label><input id="flatten" type="checkbox" checked> Flatten pitch of all samples (recommended for UTAU)</label>
+      <label><input id="validate" type="checkbox" checked> Cross-check recognised sounds against the speaker's other recordings</label>
+    </details>
+
+    <div style="margin-top:18px"><button id="go" class="primary" type="submit" disabled>Make voicebank</button></div>
+  </form>
+
+  <section id="progress" class="card hidden" aria-live="polite">
+    <h2>Working…</h2>
+    <div class="bar"><div id="barfill"></div></div>
+    <div id="msg"></div>
+    <div id="stages" class="stages"></div>
+    <div id="err" class="notice err hidden"></div>
+  </section>
+
+  <section id="result" class="card hidden">
+    <h2>Voicebank ready</h2>
+    <div id="counts" class="counts"></div>
+    <div id="downloads"></div>
+    <div id="warnings"></div>
+    <h2 style="margin-top:18px">Samples <span class="hint">(click to listen)</span></h2>
+    <div id="grid" class="grid"></div>
+  </section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const STAGES = [["ingest","Decode"],["recognise","Listen"],["select","Select"],["fill","Fill gaps"],["finish","Normalise"],["write","Write"]];
+let cfg = null, file = null, jobId = null, poll = null;
+
+fetch("/api/config").then(r => r.json()).then(c => {
+  cfg = c; $("maxmb").textContent = c.max_upload_mb;
+  const bits = [];
+  bits.push(c.ffmpeg ? "ffmpeg ✓" : "<b>ffmpeg missing</b>");
+  bits.push(c.espeak ? "template generator ✓" : "<b>espeak-ng missing</b> (default template unavailable)");
+  bits.push(c.rvc_available ? `RVC engine: <b>${c.rvc_engine}</b> ✓` :
+    "<b>No RVC engine installed</b> – install <code>rvc-python</code> or set <code>V2U_RVC_COMMAND</code> (see README). Without one, missing morae are left out.");
+  $("engine").innerHTML = bits.join(" · ");
+});
+
+const drop = $("drop");
+const setFile = f => {
+  file = f; $("go").disabled = !f;
+  $("dropTitle").textContent = f ? f.name : "Drop a .zip or an audio file here";
+  $("dropSub").textContent = f ? (f.size / 1048576).toFixed(1) + " MB · click to change" : "";
+  if (f && $("name").value === "MyVoice") $("name").value = f.name.replace(/\.[^.]+$/, "").slice(0, 60) || "MyVoice";
+};
+drop.onclick = () => $("file").click();
+drop.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("file").click(); } };
+$("file").onchange = e => setFile(e.target.files[0] || null);
+["dragenter","dragover"].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.add("over"); }));
+["dragleave","drop"].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.remove("over"); }));
+drop.addEventListener("drop", e => { if (e.dataTransfer.files[0]) setFile(e.dataTransfer.files[0]); });
+
+$("form").onsubmit = async e => {
+  e.preventDefault();
+  if (!file) return;
+  const fd = new FormData();
+  fd.append("file", file);
+  fd.append("name", $("name").value);
+  fd.append("gap_fill", $("gapfill").value);
+  fd.append("flatten_pitch", $("flatten").checked);
+  fd.append("cross_check", $("validate").checked);
+  for (const [id, field] of [["model","rvc_model"],["index","rvc_index"],["template","template"]])
+    if ($(id).files[0]) fd.append(field, $(id).files[0]);
+  $("go").disabled = true; $("result").classList.add("hidden"); $("err").classList.add("hidden");
+  $("progress").classList.remove("hidden"); $("msg").textContent = "Uploading…"; $("barfill").style.width = "1%";
+  renderStages("");
+  try {
+    const r = await upload(fd);
+    jobId = r.id; poll = setInterval(tick, 1000); tick();
+  } catch (err) { fail(err.message); }
+};
+
+function upload(fd) {   // XHR for upload progress
+  return new Promise((res, rej) => {
+    const x = new XMLHttpRequest();
+    x.open("POST", "/api/jobs");
+    x.upload.onprogress = e => { if (e.lengthComputable) { $("msg").textContent = `Uploading… ${Math.round(100*e.loaded/e.total)}%`; } };
+    x.onload = () => {
+      let body = {}; try { body = JSON.parse(x.responseText); } catch {}
+      x.status < 300 ? res(body) : rej(new Error(body.detail || `Upload failed (${x.status})`));
+    };
+    x.onerror = () => rej(new Error("Network error during upload"));
+    x.send(fd);
+  });
+}
+
+function renderStages(cur) {
+  const idx = STAGES.findIndex(s => s[0] === cur);
+  $("stages").innerHTML = STAGES.map(([k, l], i) =>
+    `<span class="chip ${i < idx ? "done" : i === idx ? "on" : ""}">${l}</span>`).join("");
+}
+function fail(msg) {
+  clearInterval(poll); $("err").textContent = msg; $("err").classList.remove("hidden");
+  $("go").disabled = !file;
+}
+async function tick() {
+  let j; try { j = await (await fetch(`/api/jobs/${jobId}`)).json(); } catch { return; }
+  $("barfill").style.width = Math.max(1, j.progress * 100) + "%";
+  $("msg").textContent = j.status === "queued" ? "Waiting for the worker…" : j.message;
+  renderStages(j.stage);
+  if (j.status === "error") fail(j.error);
+  if (j.status === "done") { clearInterval(poll); $("go").disabled = !file; showResult(j); }
+}
+
+let audioEl = null;
+function showResult(j) {
+  $("progress").classList.add("hidden"); $("result").classList.remove("hidden");
+  const r = j.report, c = r.counts;
+  $("counts").innerHTML =
+    `<span><i class="dot" style="background:var(--rec)"></i>${c.recorded} recorded</span>` +
+    `<span><i class="dot" style="background:var(--rvc)"></i>${c.rvc} RVC</span>` +
+    (c.template_raw ? `<span><i class="dot" style="background:var(--tpl)"></i>${c.template_raw} raw template</span>` : "") +
+    `<span><i class="dot" style="background:var(--miss)"></i>${c.missing} missing</span>` +
+    (r.bank_f0_hz ? `<span>pitch ≈ ${r.bank_f0_hz} Hz</span>` : "");
+  $("downloads").innerHTML =
+    `<a class="btn" href="/api/jobs/${j.id}/download">Download voicebank (.zip)</a>` +
+    (j.has_dataset ? `<a class="btn alt" href="/api/jobs/${j.id}/dataset">RVC training dataset (.zip)</a>` : "");
+  $("warnings").innerHTML = (r.warnings || []).map(w => `<div class="notice warn">${esc(w)}</div>`).join("");
+  const src = Object.fromEntries(r.samples.map(s => [s.key, s.source]));
+  const rows = {};
+  for (const m of cfg.morae) (rows[m.cls] ||= []).push(m);
+  $("grid").innerHTML = Object.values(rows).map(ms =>
+    `<div class="grow">${ms.map(m => {
+      const s = src[m.key] || "missing";
+      return `<button type="button" class="cell" data-src="${s}" data-key="${m.key}" ${s === "missing" ? "disabled" : ""}
+              title="${m.key} · ${s}">${m.kana}</button>`; }).join("")}</div>`).join("");
+  $("grid").onclick = e => {
+    const b = e.target.closest(".cell"); if (!b || b.disabled) return;
+    if (audioEl) audioEl.pause();
+    document.querySelectorAll(".cell.playing").forEach(x => x.classList.remove("playing"));
+    audioEl = new Audio(`/api/jobs/${j.id}/sample/${b.dataset.key}.wav`);
+    b.classList.add("playing"); audioEl.onended = () => b.classList.remove("playing"); audioEl.play();
+  };
+}
+const esc = s => s.replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+</script>
+</body>
+</html>

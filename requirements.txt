@@ -1,0 +1,16 @@
+# core
+numpy
+scipy
+soundfile
+praat-parselmouth
+torch
+torchaudio
+transformers
+huggingface_hub
+# web app
+fastapi
+uvicorn[standard]
+python-multipart
+# tests
+pytest
+httpx
