@@ -128,6 +128,20 @@ sounds with no English unit are spliced from existing clips (`ja_*.wav`, `zh_*.w
 `crossling.py` / `mandarin.py`. Where a plain spelling is both a pinyin syllable and a Japanese romaji alias with a different
 sound (shi, chi, ru, za, ju …), pinyin wins; the Japanese sound stays available by its hiragana name.
 
+### Longer vowels for held notes (sustain pass)
+
+```bash
+python -m voice2utau.sustain output/VLGR -o output/VLGR_sustain --songs song1.mp3 song2.mp3 \
+    --rvc-model char.pth --rvc-index char.index          # add --rvc-all to ignore the songs
+```
+Speech clips have only ~100 ms of vowel, so long notes stretch badly. This step inserts a steady held vowel into the
+vowel of every CV and lone-vowel clip (the input bank is not changed; Japanese/Mandarin aliases that reuse those clips
+get it too, oto.ini lengths are updated). Held vowels come from singing recordings (voiced, >= 0.3 s, recogniser
+confidence >= 0.5, steady enough); vowels the songs never hold are made by RVC from an espeak-ng vowel (3 input pitches,
+steadiest window kept). Diphthongs borrow the nucleus (ay/aw -> aa, ey -> eh, ow/oy -> ao). The report's `sustain` section says,
+per clip, which body was used and where it came from. Joins are phase-aligned and crossfaded; the join point/body are
+picked by LPC-envelope match. Not verified by ear: steadiness and join quality are measured and inspected on spectrograms only.
+
 ### Gap-fill modes
 
 | mode | behaviour |
