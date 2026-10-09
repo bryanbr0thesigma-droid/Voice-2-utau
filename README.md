@@ -128,6 +128,23 @@ sounds with no English unit are spliced from existing clips (`ja_*.wav`, `zh_*.w
 `crossling.py` / `mandarin.py`. Where a plain spelling is both a pinyin syllable and a Japanese romaji alias with a different
 sound (shi, chi, ru, za, ju …), pinyin wins; the Japanese sound stays available by its hiragana name.
 
+### Native Mandarin (no English/Japanese units)
+
+`mandarin` above reuses English clips, so it has an English accent. For real Mandarin articulation (aspirated vs
+unaspirated stops, retroflex zh/ch/sh/r, ü, nasal codas) use `mandarin_native`: espeak-ng's native `cmn-latn-pinyin`
+voice is converted to the character's timbre with an RVC model - all ~410 pinyin syllables.
+
+```bash
+sudo apt install espeak-ng
+python -m voice2utau.mandarin_native dataset BANK [BANK ...] -o train.zip     # RVC training audio from the bank (no Mandarin needed)
+# train an RVC v2 model on train.zip (Applio / RVC WebUI), then:
+python -m voice2utau.mandarin_native build --bank BANK --rvc-model char.pth --rvc-index char.index -o out --into BANK
+```
+Aliases are plain pinyin (`ma`, `zhuang`, `lv`, `xu`); one already used by another sound in the bank gets `_zh` (ARPAbet `er` ->
+pinyin `er_zh`). Samples are tone 1 (flat); tones 2-4 come from the pitch curve. Without a model, `--preview-template` gives the
+raw robotic espeak voice for checking only. Not verified by ear: the bundled tests use a stand-in for RVC, and no real
+model has been run here. Sounds the character never produced are rendered in its timbre with espeak's articulation, not a native speaker's.
+
 ### Longer vowels for held notes (sustain pass)
 
 ```bash
