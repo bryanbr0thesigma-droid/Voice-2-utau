@@ -34,3 +34,18 @@ def test_toward_is_between_reference_and_other(tmp_path):
     _, g_ref = spectrum.gain_db(ref, src)
     _, g_mid = spectrum.gain_db(ref, src, toward=bright)
     assert g_mid[90:230].mean() > g_ref[90:230].mean() + 0.5
+
+
+def test_consonant_part_gets_a_capped_gain(tmp_path):
+    src = tmp_path / "src"
+    ref = _tone_set(tmp_path / "ref", 0.5)
+    _tone_set(src, 2.0, n=1)                                         # dull; the EQ wants a big boost
+    (src / "oto.ini").write_bytes(b"0.wav=ma,0,100,-400,300,50\r\n")   # preutterance 300 ms
+    f, g = spectrum.gain_db(ref, sorted(src.glob("*.wav")))
+    assert spectrum.read_pre_ms(src / "oto.ini") == {"0.wav": 300.0}
+    spectrum.apply_eq(src, tmp_path / "capped", f, g, cons_cap_db=0.0)
+    spectrum.apply_eq(src, tmp_path / "plain", f, g, cons_cap_db=None)
+    a, _ = audio.read_wav(tmp_path / "capped" / "0.wav")
+    b, _ = audio.read_wav(tmp_path / "plain" / "0.wav")
+    hf = lambda y: np.abs(np.fft.rfft(y[: int(0.2 * audio.SR_BANK)]))[200:1500].sum()
+    assert hf(a) < 0.7 * hf(b)                                       # before the preutterance: no presence boost

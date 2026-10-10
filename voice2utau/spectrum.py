@@ -64,27 +64,61 @@ def gain_db(reference: list[Path], source: list[Path], toward: list[Path] | None
     return f, g
 
 
-def apply_eq(src: Path, dst: Path, f: np.ndarray, g: np.ndarray) -> int:
-    """EQ every wav in `src` into `dst` (other files are copied). Each clip keeps its RMS."""
+def read_pre_ms(oto: Path) -> dict[str, float]:
+    """wav file name -> preutterance (ms) from an oto.ini (first entry per file)."""
+    out: dict[str, float] = {}
+    if not oto.exists():
+        return out
+    for line in oto.read_bytes().decode("cp932", "replace").splitlines():
+        if "=" in line:
+            wav, rest = line.split("=", 1)
+            f = rest.split(",")
+            if len(f) >= 6 and wav not in out:
+                out[wav] = float(f[4])             # alias, offset, consonant, cutoff, preutterance, overlap
+    return out
+
+
+def _eq(x: np.ndarray, sr: int, f: np.ndarray, g: np.ndarray) -> np.ndarray:
+    N = 1 << int(np.ceil(np.log2(len(x) * 2)))
+    gain = 10 ** (np.interp(np.fft.rfftfreq(N, 1 / sr), f, g) / 20)
+    return np.fft.irfft(np.fft.rfft(x, N) * gain, N)[:len(x)].astype("float32")
+
+
+def apply_eq(src: Path, dst: Path, f: np.ndarray, g: np.ndarray, cons_cap_db: float | None = 2.0) -> int:
+    """EQ every wav in `src` into `dst` (other files are copied).
+
+    The EQ is measured on voiced sound, so boosting the consonant part as well makes fricatives (zh ch sh c ...) harsher
+    and louder against their vowels. With `cons_cap_db` (and an oto.ini in `src`) the part before the preutterance gets the
+    gain capped at that many dB, crossfading into the full EQ over 30 ms at the vowel start. The vowel part keeps the level
+    it would have had with the plain EQ."""
     dst.mkdir(parents=True, exist_ok=True)
+    pre_of = read_pre_ms(src / "oto.ini") if cons_cap_db is not None else {}
     n = 0
     for p in sorted(src.iterdir()):
         if p.suffix.lower() != ".wav":
             shutil.copy2(p, dst / p.name)
             continue
         x, sr = audio.read_wav(p)
-        N = 1 << int(np.ceil(np.log2(len(x) * 2)))
-        gain = 10 ** (np.interp(np.fft.rfftfreq(N, 1 / sr), f, g) / 20)
-        y = np.fft.irfft(np.fft.rfft(x, N) * gain, N)[:len(x)].astype("float32")
+        y = _eq(x, sr, f, g)
         y *= np.sqrt((x ** 2).mean() / max(1e-12, (y ** 2).mean()))
+        if p.name in pre_of:
+            c = int(pre_of[p.name] / 1000 * sr)
+            w = int(0.015 * sr)
+            yc = _eq(x, sr, f, np.minimum(g, cons_cap_db))
+            v = slice(c + w, c + w + int(0.1 * sr))                      # vowel window: same level as the plain EQ
+            if len(y[v]) > 200:
+                yc *= np.sqrt((y[v] ** 2).mean() / max(1e-12, (yc[v] ** 2).mean()))
+            mix = np.clip((np.arange(len(x)) - (c - w)) / (2 * w), 0, 1).astype("float32")
+            y = yc * (1 - mix) + y * mix
         audio.write_wav(dst / p.name, np.clip(y, -0.99, 0.99), sr)
         n += 1
     return n
 
 
-def match_dir(src: Path, dst: Path, reference: list[Path], toward: list[Path] | None = None) -> np.ndarray:
+def match_dir(src: Path, dst: Path, reference: list[Path], toward: list[Path] | None = None,
+              cons_cap_db: float | None = 2.0) -> np.ndarray:
     f, g = gain_db(reference, sorted(src.glob("*.wav")), toward)
-    apply_eq(src, dst, f, g)
+    apply_eq(src, dst, f, g, cons_cap_db)
     return np.interp([200, 500, 1000, 2000, 3000, 5000, 8000], f, g)
 
 
