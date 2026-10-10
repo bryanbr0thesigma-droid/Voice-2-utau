@@ -140,6 +140,11 @@ python -m voice2utau.mandarin_native dataset BANK [BANK ...] -o train.zip     # 
 # train an RVC v2 model on train.zip (Applio / RVC WebUI), then:
 python -m voice2utau.mandarin_native build --bank BANK --rvc-model char.pth --rvc-index char.index -o out --into BANK
 ```
+No GPU/RVC WebUI? `tools/rvc_train.py` fine-tunes an RVC v2 32k model on a folder of wavs on CPU (about 6 s/step at batch 4 on 4 cores;
+`--hours` sets the budget, checkpoints every `--save-every` steps, resumable) and builds the `.index`:
+`python tools/rvc_train.py --dataset DIR --work WORK --out OUT --name Near --hours 3` (same venv as `rvc_infer.py`; plus `setuptools<81`
+for pyworld). Unverified against the RVC WebUI trainer - judge the result by ear.
+
 Aliases are plain pinyin (`ma`, `zhuang`, `lv`, `xu`); one already used by another sound in the bank gets `_zh` (ARPAbet `er` ->
 pinyin `er_zh`). Samples are tone 1 (flat); tones 2-4 come from the pitch curve. Without a model, `--preview-template` gives the
 raw robotic espeak voice for checking only. Not verified by ear: the bundled tests use a stand-in for RVC, and no real
