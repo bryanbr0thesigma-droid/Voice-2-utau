@@ -140,6 +140,10 @@ python -m voice2utau.mandarin_native dataset BANK [BANK ...] -o train.zip     # 
 # train an RVC v2 model on train.zip (Applio / RVC WebUI), then:
 python -m voice2utau.mandarin_native build --bank BANK --rvc-model char.pth --rvc-index char.index -o out --into BANK
 ```
+A briefly trained model can come out dull. `python -m voice2utau.spectrum SRC OUT --reference REAL.wav ... [--toward CLEARER.wav ...]` EQs the
+converted syllables to the long-term spectrum of the character's real recordings (`--toward` pulls halfway to a brighter set, copying no
+peak over +12 dB). With 900 steps on 18 min of audio this was needed; measured by spectrum only, judged by ear.
+
 No GPU/RVC WebUI? `tools/rvc_train.py` fine-tunes an RVC v2 32k model on a folder of wavs on CPU (about 6 s/step at batch 4 on 4 cores;
 `--hours` sets the budget, checkpoints every `--save-every` steps, resumable) and builds the `.index`:
 `python tools/rvc_train.py --dataset DIR --work WORK --out OUT --name Near --hours 3` (same venv as `rvc_infer.py`; plus `setuptools<81`
