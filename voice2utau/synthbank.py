@@ -1,16 +1,19 @@
 """A Japanese CV voicebank synthesised from scratch - no recordings, no TTS, no voice model.
 
 Adachi Rei's original bank is described as built from generated sounds (sine waves and noise) edited by hand, not sampled
-from a speaker. This does the same with a small source-filter synthesiser:
+from a speaker. This does the same with a small source-filter (Klatt-style) synthesiser:
 
-    glottal pulse train (constant pitch) + aspiration noise  ->  cascade of 5 formant resonators (time-varying)
-    + separate band-passed noise for fricatives/bursts       ->  one clip per hiragana CV unit of `morae.MORAE`
+    glottal pulses (constant mean pitch, slight jitter/shimmer) + aspiration noise
+        -> cascade of 5 time-varying formant resonators (+ a nasal anti-resonance for m/n/ny)
+    + separate band-passed noise for fricatives and stop bursts
+        -> one clip per hiragana CV unit of `morae.MORAE`
 
-Vowels are steady (so the editor can stretch them cleanly); consonants are rule-based (stop bursts + aspiration, fricative
-noise bands, nasal murmur, tap, glides) with formant transitions into the vowel. Every clip is at exactly F0, and gets a
-flat .frq file. The voice is intentionally synthetic and buzzy.
+Consonants are rule-based: closure silence + place-dependent burst + aspiration for stops, noise bands for fricatives,
+damped nasal murmur with a zero, a tap for r, glides for y/w. Formant transitions follow vowel-dependent loci (locus
+equations), so "ka" and "ki" start differently. Vowels are steady so the editor can stretch them. Every clip has a flat
+.frq file at F0. The result is intentionally synthetic.
 
-    python -m voice2utau.synthbank -o out --name "Synth CV"
+    python -m voice2utau.synthbank -o out --name MADO
 """
 from __future__ import annotations
 
@@ -26,66 +29,63 @@ from .morae import MORAE, Mora
 from .sfxbank import write_frq
 
 SR = audio.SR_BANK
-F0 = 261.63                       # every sample is exactly C4
+F0 = 261.63                       # mean pitch of every sample (C4)
 BLOCK = 64
-VOWEL_MS = 380                    # steady vowel after the transition
-TRANS_MS = 55
-# Japanese vowels, female-ish scale: (F1, F2, F3)
-VOWELS = {"a": (850, 1330, 2800), "i": (320, 2650, 3300), "u": (360, 1450, 2500), "e": (520, 2150, 2900),
-          "o": (500, 900, 2600)}
-F4, F5 = 3800, 4700
-BW = np.array([90.0, 110.0, 160.0, 220.0, 300.0])
+VOWEL_MS = 480                    # steady vowel after the transition
+# Japanese vowels, female speaker: (F1, F2, F3). u is the unrounded, central-ish [ɯ].
+VOWELS = {"a": (850, 1400, 2900), "i": (330, 2750, 3350), "u": (340, 1150, 2500), "e": (560, 2300, 3000),
+          "o": (620, 1000, 2700)}
+F4, F5 = 3900, 4800
+BW = np.array([80.0, 100.0, 150.0, 220.0, 300.0])
 
-PAL = (300, 2400, 3000)           # palatal locus ("i"-like)
-LAB = (330, 800, 2200)            # labial locus
-ALV = (350, 1750, 2700)           # alveolar locus
-VEL = (350, 1500, 2400)           # velar locus
-# class -> (kind, consonant length ms, locus, extra)
-# kinds: stop_v (voiceless stop), stop_d (voiced stop), fric, fric_v, aff, aff_v, nasal, tap, glide, h, vowel
+
+def locus(place: str, v: str) -> tuple[float, float, float]:
+    """Formant values at consonant release (locus equations: F2onset = k * F2vowel + c)."""
+    F1, F2, F3 = VOWELS[v]
+    if place == "lab":
+        return 260.0, 0.75 * F2 + 220, min(F3, 2300.0)
+    if place == "alv":
+        return 280.0, 0.45 * F2 + 1050, 2750.0
+    if place == "vel":                                    # velar pinch: F2 and F3 close together
+        f2 = 0.8 * F2 + 450 if F2 < 1800 else min(F2 + 200, 2900.0)
+        return 280.0, f2, f2 + 300
+    if place == "pal":
+        return 280.0, 2450.0, 3150.0
+    return float(F1), float(F2), float(F3)
+
+
+# class -> (kind, place, closure ms, consonant ms after the closure (to voice/vowel onset), transition ms, extras)
 CLASSES: dict[str, tuple] = {
-    "": ("vowel", 20, None, {}),
-    "k": ("stop_v", 62, VEL, {"burst": 2600, "bw": 1800, "vot": 42}),
-    "ky": ("stop_v", 70, PAL, {"burst": 3600, "bw": 2000, "vot": 48}),
-    "t": ("stop_v", 55, ALV, {"burst": 4600, "bw": 2600, "vot": 36}),
-    "p": ("stop_v", 52, LAB, {"burst": 1300, "bw": 1500, "vot": 28}),
-    "py": ("stop_v", 60, PAL, {"burst": 1800, "bw": 1800, "vot": 34}),
-    "g": ("stop_d", 42, VEL, {"burst": 2400, "bw": 1800}),
-    "gy": ("stop_d", 48, PAL, {"burst": 3400, "bw": 2000}),
-    "d": ("stop_d", 38, ALV, {"burst": 4200, "bw": 2600}),
-    "b": ("stop_d", 36, LAB, {"burst": 1200, "bw": 1500}),
-    "by": ("stop_d", 44, PAL, {"burst": 1700, "bw": 1800}),
-    "s": ("fric", 105, ALV, {"cf": 7600, "bw": 3200, "hp": 4200, "amp": 0.62}),
-    "sh": ("fric", 115, PAL, {"cf": 3600, "bw": 1700, "hp": 2000, "amp": 1.0}),
-    "z": ("fric_v", 70, ALV, {"cf": 7200, "bw": 3200, "hp": 4200, "amp": 0.35}),
-    "j": ("aff_v", 85, PAL, {"burst": 3600, "bw": 2000, "cf": 3400, "fbw": 1700, "hp": 2000, "amp": 0.4}),
-    "ch": ("aff", 95, PAL, {"burst": 3800, "bw": 2000, "cf": 3600, "fbw": 1700, "hp": 2000, "amp": 0.9}),
-    "ts": ("aff", 90, ALV, {"burst": 5200, "bw": 2600, "cf": 7400, "fbw": 3200, "hp": 4200, "amp": 0.2}),
-    "h": ("h", 85, None, {}),
-    "hy": ("h", 95, PAL, {"gain": 2.6}),
-    "f": ("fric", 85, LAB, {"cf": 2800, "bw": 4200, "hp": 800, "amp": 0.075}),
-    "n": ("nasal", 62, ALV, {"f2": 1500}),
-    "ny": ("nasal", 70, PAL, {"f2": 2300}),
-    "m": ("nasal", 62, LAB, {"f2": 1000}),
-    "my": ("nasal", 72, PAL, {"f2": 1900}),
-    "r": ("tap", 34, ALV, {}),
-    "ry": ("tap", 48, PAL, {}),
-    "y": ("glide", 48, PAL, {}),
-    "w": ("glide", 55, (320, 760, 2300), {}),
+    "": ("vowel", "", 0, 0, 0, {}),
+    "k": ("stop_v", "vel", 45, 45, 45, {"vot": 40}),
+    "ky": ("stop_v", "pal", 45, 52, 50, {"vot": 46}),
+    "t": ("stop_v", "alv", 40, 36, 40, {"vot": 30}),
+    "p": ("stop_v", "lab", 40, 30, 40, {"vot": 24}),
+    "py": ("stop_v", "pal", 40, 38, 50, {"vot": 30, "bp": "lab"}),
+    "g": ("stop_d", "vel", 40, 10, 45, {}),
+    "gy": ("stop_d", "pal", 40, 14, 50, {}),
+    "d": ("stop_d", "alv", 35, 8, 40, {}),
+    "b": ("stop_d", "lab", 35, 8, 40, {}),
+    "by": ("stop_d", "pal", 35, 12, 50, {"bp": "lab"}),
+    "s": ("fric", "alv", 0, 110, 40, {"cf": 7300, "bw": 2800, "hp": 4500, "amp": 0.5}),
+    "sh": ("fric", "pal", 0, 120, 60, {"cf": 3700, "bw": 1600, "hp": 2200, "amp": 0.75}),
+    "z": ("fric_v", "alv", 0, 75, 40, {"cf": 7000, "bw": 2800, "hp": 4500, "amp": 0.3}),
+    "j": ("aff_v", "pal", 35, 55, 60, {"cf": 3500, "bw": 1600, "hp": 2200, "amp": 0.4}),
+    "ch": ("aff", "pal", 40, 62, 60, {"cf": 3700, "bw": 1600, "hp": 2200, "amp": 0.7}),
+    "ts": ("aff", "alv", 40, 62, 40, {"cf": 7200, "bw": 2800, "hp": 4500, "amp": 0.45}),
+    "h": ("h", "", 0, 95, 30, {}),
+    "hy": ("hy", "pal", 0, 95, 50, {"cf": 2700, "bw": 1300, "hp": 1600, "amp": 0.12}),
+    "f": ("f", "lab", 0, 90, 40, {}),
+    "n": ("nasal", "alv", 0, 90, 30, {"pole": 1500, "zero": 1700}),
+    "ny": ("nasal", "pal", 0, 90, 50, {"pole": 2200, "zero": 2500}),
+    "m": ("nasal", "lab", 0, 90, 30, {"pole": 1100, "zero": 1000}),
+    "my": ("nasal", "pal", 0, 90, 50, {"pole": 1100, "zero": 1000}),
+    "r": ("tap", "alv", 0, 30, 30, {}),
+    "ry": ("tap", "pal", 0, 40, 50, {}),
+    "y": ("glide", "y", 0, 45, 80, {}),
+    "w": ("glide", "w", 0, 55, 90, {}),
 }
-
-
-def _db(x: float) -> float:
-    return 10 ** (x / 20)
-
-
-def _glottal(n: int, rng: np.random.Generator) -> np.ndarray:
-    """Differentiated Rosenberg pulse train at exactly F0 (tiny shimmer so it is not a pure comb)."""
-    ph = (np.arange(n) * F0 / SR) % 1.0
-    tp, tn = 0.5, 0.1
-    g = np.where(ph < tp, 0.5 * (1 - np.cos(np.pi * ph / tp)),
-                 np.where(ph < tp + tn, np.cos(0.5 * np.pi * (ph - tp) / tn), 0.0))
-    d = np.diff(g, prepend=0.0)
-    return d / max(1e-9, np.abs(d).max())
+GLIDE_START = {"y": (280.0, 2500.0, 3200.0), "w": (300.0, 720.0, 2300.0)}
 
 
 def _ramp(n: int, a: int, b: int, lo: float = 0.0, hi: float = 1.0) -> np.ndarray:
@@ -94,7 +94,25 @@ def _ramp(n: int, a: int, b: int, lo: float = 0.0, hi: float = 1.0) -> np.ndarra
 
 
 def _track(loc: float, tgt: float, n: int, c: int, tr: int) -> np.ndarray:
-    return np.interp(np.arange(n), [0, c, c + tr, n], [loc, loc, tgt, tgt])
+    return np.interp(np.arange(n), [0, c, c + max(tr, 1), n], [loc, loc, tgt, tgt])
+
+
+def _source(n: int, rng: np.random.Generator, jitter: float = 0.004, shimmer: float = 0.03) -> np.ndarray:
+    """Differentiated Rosenberg pulses, one period at a time: mean pitch F0, slight jitter/shimmer, gentle tilt."""
+    out = np.zeros(n)
+    i = 0
+    while i < n:
+        T = max(8, int(round(SR / (F0 * (1 + jitter * rng.standard_normal())))))
+        tp, te = int(0.48 * T), int(0.6 * T)
+        p = np.zeros(T)
+        p[:tp] = 0.5 * (1 - np.cos(np.pi * np.arange(tp) / tp))
+        p[tp:te] = np.cos(0.5 * np.pi * np.arange(te - tp) / max(1, te - tp))
+        d = np.diff(p, prepend=0.0) * (1 + shimmer * rng.standard_normal())
+        m = min(T, n - i)
+        out[i:i + m] = d[:m]
+        i += T
+    out = lfilter([0.6], [1, -0.4], out)                      # soften the buzz a little
+    return out / max(1e-9, np.abs(out).max())
 
 
 def _cascade(src: np.ndarray, freqs: list[np.ndarray], bwscale: np.ndarray | None = None) -> np.ndarray:
@@ -108,12 +126,20 @@ def _cascade(src: np.ndarray, freqs: list[np.ndarray], bwscale: np.ndarray | Non
             e = min(n, s + BLOCK)
             mid = min(n - 1, (s + e) // 2)
             bw = BW[k] * (bwscale[mid] if bwscale is not None and k in (1, 2) else 1.0)
-            fc = float(f[mid])
             c = -np.exp(-2 * np.pi * bw / SR)
-            b = 2 * np.exp(-np.pi * bw / SR) * np.cos(2 * np.pi * fc / SR)
+            b = 2 * np.exp(-np.pi * bw / SR) * np.cos(2 * np.pi * float(f[mid]) / SR)
             out[s:e], zi = lfilter([1 - b - c], [1.0, -b, -c], y[s:e], zi=zi)
         y = out
     return y
+
+
+def _antiresonance(x: np.ndarray, fz: float, bw: float, gate: np.ndarray) -> np.ndarray:
+    """Nasal zero (Klatt anti-resonator), mixed in only where gate > 0."""
+    c = -np.exp(-2 * np.pi * bw / SR)
+    b = 2 * np.exp(-np.pi * bw / SR) * np.cos(2 * np.pi * fz / SR)
+    a = 1 - b - c
+    z = lfilter([1 / a, -b / a, -c / a], [1.0], x)
+    return x * (1 - gate) + z * gate
 
 
 def _band_noise(n: int, cf: float, bw: float, hp: float, rng: np.random.Generator) -> np.ndarray:
@@ -124,97 +150,153 @@ def _band_noise(n: int, cf: float, bw: float, hp: float, rng: np.random.Generato
     return x / max(1e-9, np.abs(x).max())
 
 
-def _burst(n: int, at: int, ms: float, cf: float, bw: float, rng: np.random.Generator) -> np.ndarray:
-    m = int(ms / 1000 * SR)
-    x = np.zeros(n)
-    seg = _band_noise(m, cf, bw, 500.0, rng) * np.exp(-np.arange(m) / (m / 3.0))
-    x[at:at + m] = seg[: max(0, n - at)]
-    return x
+def _burst_spec(place: str, v: str) -> tuple[float, float, float]:
+    """(centre Hz, half-width Hz, level) of the release burst."""
+    if place == "vel":
+        return locus("vel", v)[1] + 150, 380, 1.3              # compact (narrow), near the vowel's F2
+    if place == "pal":
+        return 2700, 700, 1.1
+    if place == "alv":
+        return 4800, 2200, 0.9
+    return 1200, 1100, 0.55                                    # labial: weak, diffuse, low
 
 
 def synth(m: Mora, rng: np.random.Generator | None = None) -> tuple[np.ndarray, float]:
-    """Render one CV mora. Returns (audio at 44.1 kHz, consonant length in seconds)."""
+    """Render one CV mora. Returns (audio at 44.1 kHz, preutterance in seconds = vowel/voicing onset)."""
     rng = rng or np.random.default_rng(1)
     if m.key == "nn":
         return _syllabic_n(rng)
-    kind, c_ms, locus, ex = CLASSES[m.cls]
-    c, tr = int(c_ms / 1000 * SR), int(TRANS_MS / 1000 * SR)
+    kind, place, cl_ms, c_ms, tr_ms, ex = CLASSES[m.cls]
+    cl = int(cl_ms / 1000 * SR)
+    c = cl + int(c_ms / 1000 * SR)                             # vowel (voicing) onset
+    tr = int(tr_ms / 1000 * SR)
     n = c + tr + int(VOWEL_MS / 1000 * SR)
     v = VOWELS[m.vowel]
-    loc = locus or v
-    if kind == "h":
-        loc = locus or v                                           # h: aspiration shaped by the vowel itself
-    f = [_track(loc[0], v[0], n, c, tr), _track(loc[1], v[1], n, c, tr), _track(loc[2], v[2], n, c, tr),
+    if kind == "glide":
+        loc = GLIDE_START[place]
+    elif kind == "h":
+        loc = v
+    else:
+        loc = locus(place, m.vowel) if place else v
+    # formants start moving at the release for stops (for voiceless ones most of the move happens during aspiration,
+    # otherwise the voiced transition sounds like l/d), at the end of the noise for fricatives
+    t_on = cl if kind in ("stop_d", "stop_v") else c
+    f = [_track(loc[0], v[0], n, t_on, tr), _track(loc[1], v[1], n, t_on, tr), _track(loc[2], v[2], n, t_on, tr),
          np.full(n, F4), np.full(n, F5)]
-    glot = _glottal(n, rng)
-    voiced = np.zeros(n)
+    idx = np.arange(n)
+    glot = _source(n, rng)
+    voiced = _ramp(n, c, c + int(0.008 * SR))
     asp = np.zeros(n)
     fric = np.zeros(n)
     bwscale = None
-    on = int(0.006 * SR)
+    gate_zero = np.zeros(n)
+    zero_f = 0.0
+    lp_gate = None
+    asp_hp = 0.0
+
     if kind == "vowel":
-        voiced = _ramp(n, 0, on)
-    elif kind == "stop_v":
-        voiced = _ramp(n, c, c + on)
-        fric += _burst(n, 0, 11, ex["burst"], ex["bw"], rng) * 2.2
-        a = int(0.011 * SR)
-        asp = np.where((np.arange(n) >= a) & (np.arange(n) < c + on), 1.0, 0.0) * 1.3 * _ramp(n, a, a + on)
-    elif kind == "stop_d":
-        pv = int(0.020 * SR)
-        voiced = np.where(np.arange(n) < pv, 0.18, 1.0) * _ramp(n, 0, on)
-        voiced[pv: c] = 0.18 + 0.4 * (np.arange(c - pv) / max(1, c - pv))
-        voiced[c:] = 1.0
-        fric += _burst(n, pv, 7, ex["burst"], ex["bw"], rng) * 0.45
-    elif kind in ("fric", "fric_v", "aff", "aff_v"):
-        fr0 = int(0.012 * SR) if kind.startswith("aff") else 0
-        cf, fbw = ex.get("cf"), ex.get("fbw", ex.get("bw"))
-        noise = _band_noise(n, cf, fbw, ex["hp"], rng)
-        end = c + int(0.012 * SR)
-        env = _ramp(n, fr0, fr0 + int(0.015 * SR)) * (1 - _ramp(n, c - int(0.01 * SR), end))
-        fric += noise * env * ex["amp"]
-        if kind.startswith("aff"):
-            fric += _burst(n, 0, 9, ex["burst"], ex["bw"], rng) * 0.7
-        if kind.endswith("_v"):
-            voiced = np.minimum(_ramp(n, 0, int(0.01 * SR)), 1.0) * np.where(np.arange(n) < c, 0.45, 1.0)
+        voiced = _ramp(n, 0, int(0.025 * SR))
+    elif kind in ("stop_v", "stop_d"):
+        bcf, bbw, blev = _burst_spec(ex.get("bp", place), m.vowel)
+        bl = int(0.015 * SR)
+        burst = _band_noise(bl, bcf, bbw, 400.0, rng) * np.exp(-np.arange(bl) / (bl / 2.5))
+        if kind == "stop_v":
+            fric[cl:cl + bl] += burst * 4.0 * blev
+            if place in ("vel", "pal"):                        # velars often release with a second, smaller burst
+                k2 = cl + int(0.018 * SR)
+                fric[k2:k2 + bl] += burst * 1.6 * blev
+            a0 = cl + int(0.004 * SR)
+            asp = ((idx >= a0) & (idx < c + int(0.004 * SR))) * _ramp(n, a0, a0 + int(0.006 * SR)) * 3.2
+            asp_hp = 1200.0
         else:
-            voiced = _ramp(n, c - int(0.005 * SR), c + on)
-        asp = 0.18 * np.where(np.arange(n) < c, 1.0, 0.0)
+            bar = np.where(idx < cl, 0.12, 1.0)                # low voicing bar through the closure
+            voiced = bar * _ramp(n, 0, int(0.01 * SR))
+            f_bar = [np.where(idx < cl, 230.0, x) if k == 0 else x for k, x in enumerate(f)]
+            f = f_bar
+            fric[cl:cl + bl] += burst * 1.8 * blev
+            bwscale = np.where(idx < cl, 4.0, 1.0)             # the bar is mostly F1
+    elif kind in ("fric", "fric_v", "aff", "aff_v", "hy"):
+        f0n = cl
+        noise = _band_noise(n, ex["cf"], ex["bw"], ex["hp"], rng)
+        rise = int((0.004 if kind.startswith("aff") else 0.03) * SR)
+        env = _ramp(n, f0n, f0n + rise) * (1 - _ramp(n, c - int(0.012 * SR), c + int(0.006 * SR)))
+        if kind.startswith("aff"):
+            bcf, bbw, _ = _burst_spec(place, m.vowel)
+            bl = int(0.010 * SR)
+            fric[cl:cl + bl] += _band_noise(bl, bcf, bbw, 400.0, rng) * np.exp(-np.arange(bl) / (bl / 2.5)) * 5.0
+        if kind.endswith("_v"):
+            voiced = np.where(idx < c, 0.5, 1.0) * _ramp(n, 0, int(0.012 * SR))
+            if kind == "aff_v":
+                voiced = voiced * np.where(idx < cl, 0.25, 1.0)
+            noise = noise * (0.6 + 0.4 * np.abs(glot) / max(1e-9, np.abs(glot).max()))   # voicing-modulated noise
+        fric += noise * env * ex["amp"]
+        if kind == "hy":
+            asp = env * 1.6
     elif kind == "h":
-        a = int(0.02 * SR)
-        asp = _ramp(n, 0, a) * (1 - _ramp(n, c - a, c + int(0.01 * SR))) * 0.8 * ex.get("gain", 1.0)
-        voiced = _ramp(n, c - int(0.015 * SR), c + int(0.01 * SR))
+        a = int(0.025 * SR)
+        asp = _ramp(n, 0, a) * (1 - _ramp(n, c - int(0.01 * SR), c + int(0.01 * SR))) * 0.65
+        asp_hp = 400.0
+        bwscale = np.where(idx < c, 2.5, 1.0)                  # breathy, wide F1-F3 during [h]
+        voiced = _ramp(n, c - int(0.012 * SR), c + int(0.012 * SR))
+    elif kind == "f":
+        a = int(0.025 * SR)
+        envf = _ramp(n, 0, a) * (1 - _ramp(n, c - int(0.012 * SR), c + int(0.006 * SR)))
+        fric += _band_noise(n, 2400, 2200, 600, rng) * envf * 0.22
+        asp = envf * 0.5
     elif kind == "nasal":
-        nas = (260, ex["f2"], 2800)
-        f = [_track(nas[0], v[0], n, c, tr), _track(nas[1], v[1], n, c, tr), _track(nas[2], v[2], n, c, tr),
-             np.full(n, F4), np.full(n, F5)]
-        voiced = np.where(np.arange(n) < c, 0.55, 1.0) * _ramp(n, 0, on)
-        bwscale = np.where(np.arange(n) < c, 2.6, 1.0)                 # damped F2/F3 in the murmur
+        nas = (260.0, float(ex["pole"]), 2700.0)
+        f = [np.where(idx < c, nas[k], x) if k < 3 else x for k, x in enumerate(f)]
+        voiced = np.where(idx < c, 0.65, 1.0) * _ramp(n, 0, int(0.012 * SR))
+        bwscale = np.where(idx < c, 3.0, 1.0)                 # damped F2/F3 in the murmur
+        gate_zero = 1 - _ramp(n, c - int(0.004 * SR), c + int(0.012 * SR))
+        zero_f = float(ex["zero"])
     elif kind == "tap":
-        t = np.arange(n) / SR
-        dip = 1.0 - 0.85 * np.exp(-(((t - 0.018) / 0.009) ** 2))
-        voiced = _ramp(n, 0, on) * dip
+        t = idx / SR
+        tc = c / SR - 0.012
+        dip = 1.0 - 0.9 * np.exp(-(((t - tc) / 0.007) ** 2))
+        voiced = _ramp(n, 0, int(0.012 * SR)) * dip
+        f = [np.where(idx < c, x * (0.85 if k == 2 else 1.0), x) for k, x in enumerate(f)]   # lowered F3 before the tap
     elif kind == "glide":
-        voiced = _ramp(n, 0, int(0.015 * SR))
-    glot_src = glot * voiced + rng.standard_normal(n) * asp * 0.35
-    y = _cascade(glot_src, f, bwscale) + fric * 2.2
-    # level the vowel by its first formant (open vowels are louder) and shape the end
-    tail = int(0.035 * SR)
+        voiced = _ramp(n, 0, int(0.03 * SR)) * np.where(idx < c, 0.75, 1.0)
+
+    noise = rng.standard_normal(n)
+    if asp_hp:                                                 # aspiration after a stop: open glottis, energy in F2/F3
+        noise = sosfilt(butter(2, asp_hp, "high", fs=SR, output="sos"), noise) * 2.0
+    src = glot * voiced + noise * asp * 0.3 + rng.standard_normal(n) * voiced * 0.004
+    if lp_gate is not None:
+        low = lfilter([1 - 0.93], [1, -0.93], src) * 1.4
+        src = src * (1 - lp_gate) + low * lp_gate
+    y = _cascade(src, f, bwscale)
+    if zero_f:
+        y = _antiresonance(y, zero_f, 120.0, gate_zero)
+    y = y + fric * 1.6
+    tail = int(0.04 * SR)
     y[-tail:] *= np.linspace(1, 0, tail)
     y = y / max(1e-9, np.abs(y).max()) * 0.8
-    return y.astype("float32"), c / SR
+    return y.astype("float32"), c / SR if kind != "vowel" else 0.02
 
 
 def _syllabic_n(rng: np.random.Generator) -> tuple[np.ndarray, float]:
-    n = int(0.42 * SR)
-    f = [np.full(n, 260.0), np.full(n, 1150.0), np.full(n, 2600.0), np.full(n, F4), np.full(n, F5)]
-    voiced = _ramp(n, 0, int(0.01 * SR)) * 0.8
-    y = _cascade(_glottal(n, rng) * voiced, f, np.full(n, 2.4))
+    n = int(0.45 * SR)
+    f = [np.full(n, 260.0), np.full(n, 1200.0), np.full(n, 2600.0), np.full(n, F4), np.full(n, F5)]
+    voiced = _ramp(n, 0, int(0.02 * SR)) * 0.8
+    y = _cascade(_source(n, rng) * voiced, f, np.full(n, 3.0))
+    y = _antiresonance(y, 1600.0, 150.0, np.ones(n))
     tail = int(0.05 * SR)
     y[-tail:] *= np.linspace(1, 0, tail)
     return (y / max(1e-9, np.abs(y).max()) * 0.8).astype("float32"), 0.02
 
 
-def build(out_dir: Path, name: str = "Synth CV") -> Path:
+def breath(rng: np.random.Generator) -> np.ndarray:
+    """An in-breath: soft noise through a neutral vowel tract."""
+    n = int(0.5 * SR)
+    env = np.sin(np.pi * np.arange(n) / n) ** 1.5
+    f = [np.full(n, 500.0), np.full(n, 1500.0), np.full(n, 2500.0), np.full(n, F4), np.full(n, F5)]
+    y = _cascade(rng.standard_normal(n) * env, f, np.full(n, 3.0))
+    return (y / max(1e-9, np.abs(y).max()) * 0.3).astype("float32")
+
+
+def build(out_dir: Path, name: str = "MADO") -> Path:
     rng = np.random.default_rng(7)
     clips: dict[str, Clip] = {}
     for key, m in MORAE.items():
@@ -223,14 +305,31 @@ def build(out_dir: Path, name: str = "Synth CV") -> Path:
         clips[key] = Clip(m, y, split, F0, "synth", 1.0, "klatt-style source-filter")
     report = {"kind": "synthbank", "f0_hz": F0, "units": len(clips),
               "samples": [{"key": k, "source": "synth", "f0": F0} for k in clips],
-              "method": "glottal pulse train + aspiration through a 5-formant cascade; band-passed noise for fricatives/bursts"}
+              "method": "glottal pulses + aspiration through a 5-formant cascade (+ nasal zero); band-passed noise "
+                        "for fricatives and bursts; vowel-dependent consonant loci"}
     root = write_bank(clips, out_dir, name, report)
     for k in clips:
         write_frq(root / f"{k}_wav.frq", len(clips[k].audio))
+    # romaji aliases next to the hiragana ones, plus a breath sample
+    oto = root / "oto.ini"
+    lines = oto.read_bytes().decode("cp932").splitlines()
+    extra = []
+    for l in lines:
+        wav, rest = l.split("=", 1)
+        key = wav[:-4]
+        romaji = "n" if key == "nn" else key
+        extra.append(f"{wav}={romaji},{rest.split(',', 1)[1]}")
+    br = breath(rng)
+    audio.write_wav(root / "br.wav", br, SR)
+    write_frq(root / "br_wav.frq", len(br))
+    dur = len(br) / SR * 1000
+    extra += [f"br.wav=息,0,{dur - 10:.1f},{-dur:.1f},20,5", f"br.wav=br,0,{dur - 10:.1f},{-dur:.1f},20,5"]
+    oto.write_bytes(("\n".join(lines + extra) + "\n").encode("cp932"))
     (root / "readme.txt").write_text(
-        f"{name}\nA Japanese hiragana CV voicebank synthesised from scratch (source-filter synthesis, constant C4 = {F0:.2f} Hz), "
-        "no recordings and no voice model.\nSet the aliases to hiragana. Vowels are steady so long notes stretch cleanly; the voice "
-        "is intentionally synthetic.\nGenerated by voice2utau.synthbank - free to use.\n", encoding="utf-8")
+        f"{name}\nA Japanese CV voicebank synthesised from scratch (source-filter synthesis, mean pitch C4 = {F0:.2f} Hz), "
+        "no recordings and no voice model.\nAliases: hiragana (か) and romaji (ka); ん is also 'n'; 息 / br is a breath.\n"
+        "Vowels are steady so long notes stretch cleanly; the voice is intentionally synthetic.\n"
+        "Generated by voice2utau.synthbank - free to use.\n", encoding="utf-8")
     return root
 
 
@@ -238,10 +337,10 @@ def main() -> None:
     import argparse
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("-o", "--out", type=Path, required=True)
-    ap.add_argument("--name", default="Synth CV")
+    ap.add_argument("--name", default="MADO")
     a = ap.parse_args()
     root = build(a.out, a.name)
-    print(f"wrote {len(MORAE)} units to {root}")
+    print(f"wrote {len(MORAE)} units (+ romaji aliases and a breath) to {root}")
 
 
 if __name__ == "__main__":

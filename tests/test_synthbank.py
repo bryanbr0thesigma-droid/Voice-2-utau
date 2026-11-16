@@ -14,10 +14,10 @@ def _centroid(x, a, b):
 
 def test_every_unit_is_synthesised_at_exact_pitch_and_is_clean():
     rng = np.random.default_rng(3)
-    for key in ("a", "ka", "shi", "tsu", "nn", "ryo", "fu", "nya", "wa"):
+    for key in ("a", "ka", "shi", "tsu", "nn", "ryo", "fu", "nya", "wa", "ga", "chi"):
         y, split = synthbank.synth(MORAE[key], rng)
-        assert np.isfinite(y).all() and 0.1 < np.abs(y).max() <= 0.81 and len(y) / synthbank.SR > 0.3, key
-        assert 0.01 <= split <= 0.13, key
+        assert np.isfinite(y).all() and 0.1 < np.abs(y).max() <= 0.81 and len(y) / synthbank.SR > 0.4, key
+        assert 0.01 <= split <= 0.16, key
     y, _ = synthbank.synth(MORAE["a"], rng)
     p = parselmouth.Sound(y.astype("float64"), synthbank.SR).to_pitch(0.01, 100, 600)
     f0 = np.nanmedian([p.get_value_at_time(t) for t in np.arange(0.15, 0.4, 0.02)])
@@ -39,11 +39,23 @@ def test_fricatives_have_the_right_noise_band_and_vowels_differ():
     assert r["i"] > r["e"] > r["u"] > r["a"] and r["i"] - r["a"] > 20          # high F2 for i/e, low F2 for u/a
 
 
+def test_consonant_levels_sit_below_the_vowel():
+    """h and nasal murmurs once came out louder than their vowel; keep every consonant part under it."""
+    rng = np.random.default_rng(3)
+    for key in ("ha", "he", "ma", "na", "sa", "sha", "za"):              # (stop bursts may briefly reach vowel level)
+        y, pre = synthbank.synth(MORAE[key], rng)
+        c = int(pre * synthbank.SR)
+        rms = lambda a, b: np.sqrt((y[a:b] ** 2).mean())
+        assert 20 * np.log10(rms(int(0.005 * synthbank.SR), c) / rms(c + int(0.05 * synthbank.SR), c + int(0.15 * synthbank.SR))) < -3, key
+
+
 def test_build_writes_the_whole_cv_set(tmp_path):
-    root = synthbank.build(tmp_path, "T")
+    root = synthbank.build(tmp_path, "MADO")
     lines = [l for l in (root / "oto.ini").read_bytes().decode("cp932").splitlines() if "=" in l]
-    assert len(lines) == len(MORAE) == 101
-    assert {l.split("=")[1].split(",")[0] for l in lines} >= {"あ", "か", "しゃ", "つ", "ん", "りょ"}
+    assert len(lines) == 2 * len(MORAE) + 2 and len(MORAE) == 101                 # hiragana + romaji + 息/br
+    aliases = {l.split("=")[1].split(",")[0] for l in lines}
+    assert aliases >= {"あ", "か", "しゃ", "つ", "ん", "りょ", "ka", "sha", "n", "息", "br"} and len(aliases) == len(lines)
     assert all((root / l.split("=")[0]).exists() and (root / (l.split("=")[0][:-4] + "_wav.frq")).exists() for l in lines)
     ka = next(l for l in lines if l.startswith("ka.wav")).split(",")
-    assert 55 <= float(ka[4]) <= 70                                           # preutterance ~ the consonant length
+    assert 80 <= float(ka[4]) <= 100                                          # preutterance = closure + burst + aspiration
+    assert "name=MADO" in (root / "character.txt").read_bytes().decode("cp932")
