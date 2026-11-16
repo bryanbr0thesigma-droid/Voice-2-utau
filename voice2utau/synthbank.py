@@ -67,15 +67,15 @@ CLASSES: dict[str, tuple] = {
     "d": ("stop_d", "alv", 35, 8, 40, {}),
     "b": ("stop_d", "lab", 35, 8, 40, {}),
     "by": ("stop_d", "pal", 35, 12, 50, {"bp": "lab"}),
-    "s": ("fric", "alv", 0, 110, 40, {"cf": 7300, "bw": 2800, "hp": 4500, "amp": 0.5}),
-    "sh": ("fric", "pal", 0, 120, 60, {"cf": 3700, "bw": 1600, "hp": 2200, "amp": 0.75}),
-    "z": ("fric_v", "alv", 0, 75, 40, {"cf": 7000, "bw": 2800, "hp": 4500, "amp": 0.3}),
-    "j": ("aff_v", "pal", 35, 55, 60, {"cf": 3500, "bw": 1600, "hp": 2200, "amp": 0.4}),
-    "ch": ("aff", "pal", 40, 62, 60, {"cf": 3700, "bw": 1600, "hp": 2200, "amp": 0.7}),
-    "ts": ("aff", "alv", 40, 62, 40, {"cf": 7200, "bw": 2800, "hp": 4500, "amp": 0.45}),
+    "s": ("fric", "alv", 0, 110, 40, {"cf": 7300, "bw": 2800, "hp": 4500, "amp": 0.5, "db": -12}),
+    "sh": ("fric", "pal", 0, 120, 60, {"cf": 3500, "bw": 2100, "hp": 2200, "amp": 0.75, "db": -12}),
+    "z": ("fric_v", "alv", 0, 75, 40, {"cf": 7000, "bw": 2800, "hp": 4500, "amp": 0.3, "db": -15}),
+    "j": ("aff_v", "pal", 35, 55, 60, {"cf": 3400, "bw": 2000, "hp": 2200, "amp": 0.4, "db": -14}),
+    "ch": ("aff", "pal", 40, 62, 60, {"cf": 3500, "bw": 2100, "hp": 2200, "amp": 0.7, "db": -11}),
+    "ts": ("aff", "alv", 40, 62, 40, {"cf": 7200, "bw": 2800, "hp": 4500, "amp": 0.45, "db": -11}),
     "h": ("h", "", 0, 95, 30, {}),
-    "hy": ("hy", "pal", 0, 95, 50, {"cf": 2700, "bw": 1300, "hp": 1600, "amp": 0.12}),
-    "f": ("f", "lab", 0, 90, 40, {}),
+    "hy": ("hy", "pal", 0, 95, 50, {"cf": 2700, "bw": 1300, "hp": 1600, "amp": 0.12, "db": -15}),
+    "f": ("f", "lab", 0, 90, 40, {"db": -18}),
     "n": ("nasal", "alv", 0, 90, 30, {"pole": 1500, "zero": 1700}),
     "ny": ("nasal", "pal", 0, 90, 50, {"pole": 2200, "zero": 2500}),
     "m": ("nasal", "lab", 0, 90, 30, {"pole": 1100, "zero": 1000}),
@@ -269,7 +269,16 @@ def synth(m: Mora, rng: np.random.Generator | None = None) -> tuple[np.ndarray, 
     y = _cascade(src, f, bwscale)
     if zero_f:
         y = _antiresonance(y, zero_f, 120.0, gate_zero)
-    y = y + fric * 1.6
+    fric = fric * 1.6
+    if "db" in ex and c > int(0.02 * SR):
+        # set the consonant noise relative to the vowel that follows (a fixed level made し/ち/じ, before the quiet
+        # vowel い, almost as loud as the vowel itself)
+        win = slice(c + int(0.05 * SR), c + int(0.15 * SR))
+        rv = float(np.sqrt((y[win] ** 2).mean()))
+        rf = float(np.sqrt((fric[max(0, cl - int(0.002 * SR)):c] ** 2).mean()))
+        if rf > 0:
+            fric = fric * (10 ** (ex["db"] / 20) * rv / rf)
+    y = y + fric
     tail = int(0.04 * SR)
     y[-tail:] *= np.linspace(1, 0, tail)
     y = y / max(1e-9, np.abs(y).max()) * 0.8

@@ -59,3 +59,14 @@ def test_build_writes_the_whole_cv_set(tmp_path):
     ka = next(l for l in lines if l.startswith("ka.wav")).split(",")
     assert 80 <= float(ka[4]) <= 100                                          # preutterance = closure + burst + aspiration
     assert "name=MADO" in (root / "character.txt").read_bytes().decode("cp932")
+
+
+def test_sibilants_are_set_relative_to_their_vowel():
+    """し/ち used to be as loud as the quiet vowel い after them; fricative noise now tracks the vowel level."""
+    rng = np.random.default_rng(3)
+    for key in ("shi", "sha", "chi", "su", "sa"):
+        y, pre = synthbank.synth(MORAE[key], rng)
+        c, sr = int(pre * synthbank.SR), synthbank.SR
+        rms = lambda a, b: np.sqrt((y[a:b] ** 2).mean())
+        db = 20 * np.log10(rms(int(0.01 * sr), c - int(0.01 * sr)) / rms(c + int(0.05 * sr), c + int(0.15 * sr)))
+        assert -15 < db < -8, (key, db)
