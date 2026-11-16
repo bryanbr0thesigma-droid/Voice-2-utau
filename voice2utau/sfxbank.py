@@ -44,9 +44,17 @@ def clean_name(stem: str, group: str) -> str:
     return n or "sound"
 
 
-def theme_of(path: Path, group: str) -> str:
+def theme_of(path: Path, group: str, themed: frozenset[str] = frozenset()) -> str:
+    """Theme folder name: '<Theme>_win7_[...]' folders, or the plain parent folder for groups listed in `themed`.
+    The default theme (a folder starting with 'Windows') counts as no theme."""
     m = re.match(r"^([A-Za-z0-9 ]+?)_win\d+_", path.parent.name)
-    return _safe(m.group(1)) if m else ""
+    th = _safe(m.group(1)) if m else (_safe(path.parent.name) if group in themed else "")
+    return "" if th.startswith("windows") else th
+
+
+def strip_theme(name: str, theme: str) -> str:
+    """'baseball_asterisk' (theme baseball) -> 'asterisk'."""
+    return name[len(theme) + 1:] if theme and name.startswith(theme + "_") and len(name) > len(theme) + 1 else name
 
 
 def read_mono(path: Path) -> tuple[np.ndarray, int] | None:
@@ -70,7 +78,8 @@ def onset_ms(x: np.ndarray, sr: int, frac: float = 0.1, cap_ms: float = 80.0) ->
     return float(min((idx[0] / sr * 1000) if len(idx) else 0.0, cap_ms))
 
 
-def build(groups: list[tuple[str, Path]], out_dir: Path, name: str, peak_db: float = -3.0) -> dict:
+def build(groups: list[tuple[str, Path]], out_dir: Path, name: str, peak_db: float = -3.0,
+          themed: frozenset[str] = frozenset()) -> dict:
     """groups: [(tag, folder)] in priority order (the first folder to contain a sound owns its file)."""
     root = out_dir / name
     root.mkdir(parents=True, exist_ok=True)
@@ -91,8 +100,8 @@ def build(groups: list[tuple[str, Path]], out_dir: Path, name: str, peak_db: flo
                 skipped["silent"].append(str(p))
                 continue
             h = hashlib.sha1(np.round(x * 32767).astype("int16").tobytes()).hexdigest()
-            theme = theme_of(p, tag)
-            base = "_".join(s for s in (_safe(tag), theme, clean_name(p.stem, tag)) if s)
+            theme = theme_of(p, tag, themed)
+            base = "_".join(s for s in (_safe(tag), theme, strip_theme(clean_name(p.stem, tag), theme)) if s)
             if h in seen:
                 e = seen[h]
                 if base not in aliases and base not in e["aliases"]:
@@ -158,8 +167,9 @@ def main() -> None:
     ap.add_argument("--group", nargs=2, action="append", metavar=("TAG", "DIR"), required=True)
     ap.add_argument("-o", "--out", type=Path, required=True)
     ap.add_argument("--name", default="Sound Effects")
+    ap.add_argument("--themed", action="append", default=[], metavar="TAG", help="group whose sub-folders are themes")
     a = ap.parse_args()
-    r = build([(t, Path(d)) for t, d in a.group], a.out, a.name)
+    r = build([(t, Path(d)) for t, d in a.group], a.out, a.name, themed=frozenset(a.themed))
     print(f"{r['sounds']} sounds, {r['aliases']} aliases; skipped {len(r['skipped']['unreadable'])} unreadable, "
           f"{len(r['skipped']['silent'])} silent")
 

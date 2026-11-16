@@ -38,3 +38,14 @@ def test_build_dedupes_shares_files_and_marks_one_shot(tmp_path):
     assert frq[:8] == b"FREQ0003" and len(frq) == 40 + 16 * (len(frq) - 40) // 16
     peak = float(np.abs(audio.read_wav(root / "win31_ding.wav")[0]).max())
     assert abs(20 * np.log10(peak) + 3.0) < 0.3
+
+
+def test_themed_group_uses_folder_as_theme_and_strips_it_from_names(tmp_path):
+    g = tmp_path / "g"
+    (g / "Baseball").mkdir(parents=True)
+    (g / "Windows 98").mkdir()
+    _tone(g / "Baseball" / "Baseball asterisk.wav", hz=300)
+    _tone(g / "Windows 98" / "Windows 98 asterisk.wav", hz=500)
+    r = sfxbank.build([("win98", g)], tmp_path / "out", "T", themed=frozenset({"win98"}))
+    names = sorted(a for e in r["entries"] for a in e["aliases"])
+    assert names == ["win98_asterisk", "win98_baseball_asterisk"]
