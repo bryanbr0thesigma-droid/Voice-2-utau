@@ -1,43 +1,44 @@
 import numpy as np
+import pytest
 
 from voice2utau import quest
-from voice2utau.sing import Note
 
-SR = 44100
-
-
-def _note(lyric, start, dur, num=60):
-    return Note(lyric=lyric, length=480, notenum=num, tempo=120.0, start=start, dur=dur)
+SR = 22050
 
 
-def _voice(sec=2.0):
+def _startup(sec=3.0):
     t = np.arange(int(sec * SR)) / SR
-    return (0.3 * np.sin(2 * np.pi * 220 * t) * (1 + 0.5 * np.sin(2 * np.pi * 3 * t))).astype("float32")
+    env = np.minimum(1, t / 0.7) * np.exp(-np.maximum(0, t - 0.7) / 0.6)
+    return (env * (np.sin(2 * np.pi * 392 * t) + np.sin(2 * np.pi * 588 * t))).astype("float32")
 
 
-def test_passthrough_keeps_level_and_steps_at_frame_rate():
-    x = _voice()
-    y = quest.passthrough(x, SR, fps=36.0, grain=0.0, lag_db=-120.0, top_hz=20000.0)
-    assert abs(np.sqrt((y ** 2).mean()) / np.sqrt((x ** 2).mean()) - 1) < 1e-3
-    assert not np.allclose(y, x, atol=1e-2)
+def test_startup_ir_keeps_the_swell_but_not_the_chord():
+    ir = quest.startup_ir(_startup(), SR)
+    assert abs(np.sqrt((ir.astype(float) ** 2).sum()) - 1) < 1e-4
+    assert np.allclose(ir[:int(0.02 * SR)], 0)                # pre-delay
+    e = lambda a, b: np.sqrt((ir[int(a * SR):int(b * SR)] ** 2).mean())
+    assert e(0.6, 0.9) > e(0.03, 0.2) and e(0.6, 0.9) > e(2.4, 2.8)   # swells, then fades
+    X = np.abs(np.fft.rfft(ir)); f = np.fft.rfftfreq(len(ir), 1 / SR)
+    band = (f > 300) & (f < 700)
+    assert X[band].max() < 8 * np.median(X[band])             # no sharp G/D peaks left to clash with the song
 
 
-def test_phrases_split_on_rests():
-    notes = [_note("a", 0.0, 0.5), _note("i", 0.5, 0.5), _note("R", 1.0, 0.5), _note("u", 1.5, 0.5)]
-    assert quest.phrases(notes) == [(0.0, 1.0), (1.5, 2.0)]
+def test_dream_keeps_dry_and_adds_tail():
+    rng = np.random.default_rng(1)
+    x = (rng.standard_normal(SR) * 0.1).astype("float32")
+    ir = quest.startup_ir(_startup(), SR)
+    y = quest.dream(x, SR, ir, wet_db=-6.0)
+    assert len(y) == len(x) + len(ir) - 1
+    assert np.sqrt((y[len(x):] ** 2).mean()) > 0            # reverb tail rings past the end
+    wet = y[:len(x)] - x
+    assert abs(20 * np.log10(np.sqrt((wet ** 2).mean()) / np.sqrt((x ** 2).mean())) + 6) < 0.1
 
 
-def test_emerge_starts_in_passthrough_and_resolves_clean():
-    clean = np.ones(SR * 2, dtype="float32"); pt = np.zeros_like(clean)
-    y = quest.emerge(clean, pt, SR, [_note("a", 0.5, 1.0)], ramp=0.4, lead=0.1)
-    assert y[int(0.45 * SR)] < 0.01 and y[int(0.95 * SR)] > 0.99 and y[int(0.2 * SR)] > 0.99
-
-
-def test_guardian_only_flares_on_top_notes():
-    x = _voice(2.0)
-    notes = [_note("a", 0.0, 0.9, 60), _note("i", 1.0, 0.9, 67)]
-    assert [n.notenum for n in quest.high_notes(notes)] == [67]
-    sh = np.random.default_rng(0).standard_normal(SR).astype("float32")
-    y = quest.guardian(x, SR, notes, sh)
-    assert np.allclose(y[:int(0.9 * SR)], x[:int(0.9 * SR)], atol=1e-6)
-    assert not np.allclose(y[int(1.2 * SR):int(1.8 * SR)], x[int(1.2 * SR):int(1.8 * SR)], atol=1e-3)
+def test_halo_is_an_octave_up():
+    pytest.importorskip("pyworld")
+    t = np.arange(SR) / SR
+    x = sum(np.sin(2 * np.pi * 220 * k * t) / k for k in range(1, 12)).astype("float32") * 0.2
+    y = quest.halo(x, SR)
+    X = np.abs(np.fft.rfft(y[SR // 4:])); f = np.fft.rfftfreq(len(y) - SR // 4, 1 / SR)
+    h = lambda hz: X[np.abs(f - hz) < 15].max()
+    assert h(1760) > 20 * h(1540)                             # 1760 = 4 x 440; 1540 = 7 x 220 only

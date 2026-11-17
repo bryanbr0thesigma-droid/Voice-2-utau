@@ -26,15 +26,17 @@ def test_hooks_are_restored_after_building(tmp_path):
     assert synthbank.SOURCE_FN is None and synthbank.NOISE_FN is None and synthbank.POST_FN is None
 
 
-def test_kaso_post_lands_a_pop_on_the_vowel_onset():
-    from voice2utau.characters import SR, kaso_post
-    y = np.zeros(int(0.5 * SR)); c = int(0.1 * SR)
-    y[c:] = 0.5 * np.sin(2 * np.pi * 220 * np.arange(len(y) - c) / SR)    # low tone: inside the ducked band
-    pop = np.ones(2000)
-    out, c2 = kaso_post(pop, pop_db=-6.0, duck_db=-120.0, bloom_db=0.0)(y, c, None, np.random.default_rng(0))
-    assert c2 == c
-    a = c - int(0.004 * SR)
-    assert np.allclose(out[:a], 0)
-    under = out[c + 10:c + 400]                               # vowel ducked away: only the pop is left here
-    assert abs(np.sqrt((under ** 2).mean()) / (0.5 / np.sqrt(2)) - 10 ** (-6 / 20)) < 0.02
-    assert np.allclose(out[c + int(0.06 * SR):], y[c + int(0.06 * SR):])   # vowel back in full by 60 ms
+def test_airy_source_mixes_soft_tone_and_breath():
+    from voice2utau import ninchan
+    from voice2utau.characters import F0, SR, airy_source
+    t = np.arange(ninchan.N) / ninchan.N
+    table = np.sign(np.sin(2 * np.pi * t))                    # bright square: the tilt must round it off
+    rng = np.random.default_rng(0)
+    tone = airy_source(table, breath=0.0)(SR, rng)
+    X = np.abs(np.fft.rfft(tone)); f = np.fft.rfftfreq(SR, 1 / SR)
+    h = lambda k: X[np.argmin(np.abs(f - k * F0))]
+    assert h(9) / h(1) < (1 / 9) * 0.5                        # far softer than a square's 1/9
+    whisper = airy_source(table, breath=1.0)(SR, rng)
+    W = np.abs(np.fft.rfft(whisper))
+    assert W[f > 2000].sum() > W[(f > 50) & (f < 600)].sum()  # breath lives up high
+    assert np.abs(airy_source(table, 0.35)(1000, rng)).max() <= 1.0 + 1e-9

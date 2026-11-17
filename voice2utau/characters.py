@@ -5,13 +5,13 @@ nin-Chan (8-bit lineage): pulse-wave vowels (Game Boy / NES duty-cycle tone, per
     8-bit quantisation.
 BAKO (sleek, ambient): a pad voice made from an Xbox sound's own cycle, a slow swell into
     each vowel, the dashboard's air whoosh arriving before every syllable, and a low hum an octave under the note.
-Kaso (Meta Quest, tactile and close): dry, every syllable landing on the Quest UI pop with a bright bloom, Quest clicks
-    as releases, hand-gesture swipes for hiss and breath, plus a passthrough (_P) sample set; see voice2utau.quest.
+Kaso (Meta Quest, liminal and dreamy): a soft menu-chime tone carried on breath, Quest clicks as releases, the startup
+    swell as her breath; voice2utau.quest adds an octave halo and a reverb made from the Quest startup sound.
 
     python -m voice2utau.characters ninchan OUT --clicks a.wav b.wav --noise-dirs DIR ... [--sfx-bank DIR]
     python -m voice2utau.characters bako OUT --carrier startup.wav --noise-dirs DIR ...  [--sfx-bank DIR]
-    python -m voice2utau.characters kaso OUT --carrier success.wav --noise-files ... --clicks ... --pop drop.wav
-        --breath system_gesture.wav [--sfx-bank DIR]
+    python -m voice2utau.characters kaso OUT --carrier success.wav --noise-files ... --clicks ... --breath startup.wav
+        [--sfx-bank DIR]
 """
 from __future__ import annotations
 
@@ -194,38 +194,33 @@ def build_bako(out: Path, carrier: Path, noise_dirs: list[Path], sfx_bank: Path 
 
 
 # ----------------------------------------------------------------------------------------------- Kaso: Meta Quest
-def kaso_post(pop: np.ndarray | None, pop_db: float = -1.0, duck_db: float = -10.0, bloom_db: float = 5.0,
-              bloom_ms: float = 70.0, hold_ms: float = 12.0, back_ms: float = 30.0):
-    """Tactile and close: the Quest has no buttons to press, so every touch is a soft UI pop. Every syllable lands on
-    the Quest 'drop' bloop: the vowel steps aside for it (ducked under the pop, so nothing gets louder than the vowel),
-    then blooms in bright and settles, like a fingertip on glass."""
-    hp = butter(2, 2500.0, "high", fs=SR, output="sos")
+def airy_source(table: np.ndarray, breath: float = 0.35, tilt_hz: float = 1100.0):
+    """Liminal and dreamy: a soft, rounded tone like the Quest menu chimes (the carrier's own period with its harmonics
+    rolled off above `tilt_hz`), with breath noise pulsed by every glottal cycle carrying the upper formants.
+    `breath` is the noise share of the RMS (0 = pure tone, 1 = whisper)."""
+    X = np.fft.rfft(table)
+    f = np.arange(len(X)) * F0
+    X = X / np.sqrt(1 + (f / tilt_hz) ** 2)
+    wt = np.fft.irfft(X, len(table))
+    wt = wt / max(1e-9, np.abs(wt).max())
+    hp = butter(2, 900.0, "high", fs=SR, output="sos")
 
-    def post(y: np.ndarray, c: int, m, rng: np.random.Generator) -> tuple[np.ndarray, int]:
-        y = np.asarray(y, dtype=np.float64).copy()
-        w = int(0.01 * SR)
-        steady = y[c + int(0.08 * SR): c + int(0.25 * SR)]
-        ref = float(np.sqrt((steady ** 2).mean())) if len(steady) > w else float(np.sqrt((y ** 2).mean()))
-        if pop is not None and len(pop):
-            a = max(0, c - int(0.004 * SR))
-            k = min(len(pop), len(y) - a)
-            hold, back = int(hold_ms / 1000 * SR), int(back_ms / 1000 * SR)   # vowel waits under the pop, returns
-            g = np.ones(len(y))
-            d = 10 ** (duck_db / 20)
-            e1 = min(len(y), c + hold)
-            g[c:e1] = d
-            e2 = min(len(y), e1 + back)
-            g[e1:e2] = d + (1 - d) * (0.5 - 0.5 * np.cos(np.pi * np.arange(e2 - e1) / max(1, back)))
-            y *= g
-            p = pop[:k] / max(1e-9, float(np.sqrt((pop[:k] ** 2).mean())))
-            y[a:a + k] += p * ref * 10 ** (pop_db / 20)
-        s = c + int(0.02 * SR)
-        nb = min(len(y) - s, int(bloom_ms / 1000 * SR))
-        if nb > 0:                                             # brightness bloom as the vowel arrives, then settles
-            env = np.sin(np.pi * np.minimum(1, np.arange(nb) / (0.25 * nb)) / 2) * np.linspace(1, 0, nb) ** 1.5
-            y[s:s + nb] += sosfilt(hp, y)[s:s + nb] * (10 ** (bloom_db / 20) - 1) * env
-        return y, c
-    return post
+    def source(n: int, rng: np.random.Generator) -> np.ndarray:
+        tone = np.zeros(n)
+        open_ph = np.zeros(n)
+        i = 0
+        while i < n:
+            T = max(8, int(round(SR / (F0 * (1 + 0.003 * rng.standard_normal())))))
+            m = min(T, n - i)
+            tone[i:i + m] = np.interp(np.arange(T) * ninchan.N / T, np.arange(ninchan.N), wt)[:m]
+            open_ph[i:i + m] = (0.5 - 0.5 * np.cos(2 * np.pi * np.arange(T) / T))[:m]
+            i += T
+        noise = sosfilt(hp, rng.standard_normal(n)) * (0.35 + 0.65 * open_ph)
+        tone /= max(1e-9, float(np.sqrt((tone ** 2).mean())))
+        noise /= max(1e-9, float(np.sqrt((noise ** 2).mean())))
+        y = tone * (1 - breath) + noise * breath
+        return y / max(1e-9, np.abs(y).max())
+    return source
 
 
 def _load(p: Path, seconds: float | None = None) -> np.ndarray:
@@ -238,64 +233,30 @@ def _load(p: Path, seconds: float | None = None) -> np.ndarray:
     return x / max(1e-9, np.abs(x).max())
 
 
-def _passthrough_set(root: Path, suffix: str = "_P") -> int:
-    """A second set of every CV sample heard through the headset cameras (alias + suffix, e.g. あ_P / a_P)."""
-    from . import quest
-    from .sfxbank import write_frq
-    oto = root / "oto.ini"
-    lines = [l for l in oto.read_bytes().decode("cp932").splitlines() if "=" in l]
-    extra, done = [], set()
-    for l in lines:
-        wav, rest = l.split("=", 1)
-        alias, fields = rest.split(",", 1)
-        if alias.startswith("quest_") or wav == "br.wav":
-            continue
-        stem = wav[:-4]
-        if stem not in done:
-            x, sr = audio.read_wav(root / wav)
-            y = quest.passthrough(x, sr, seed=len(done))
-            audio.write_wav(root / f"{stem}{suffix}.wav", np.clip(y, -1, 1).astype("float32"), sr)
-            write_frq(root / f"{stem}{suffix}_wav.frq", len(y))
-            done.add(stem)
-        extra.append(f"{stem}{suffix}.wav={alias}{suffix},{fields}")
-    oto.write_bytes(("\n".join(lines + extra) + "\n").encode("cp932"))
-    return len(done)
-
-
-def build_kaso(out: Path, carrier: Path, noise_files: list[Path], clicks: list[Path], pop_file: Path | None,
-               breath_file: Path | None, sfx_bank: Path | None = None, name: str = "Kaso", keep: float = 0.2,
-               passthrough_set: bool = True) -> Path:
+def build_kaso(out: Path, carrier: Path, noise_files: list[Path], clicks: list[Path], breath_file: Path | None,
+               sfx_bank: Path | None = None, name: str = "Kaso", keep: float = 0.6, breath: float = 0.35) -> Path:
     c = ninchan.pick_carriers([], top=1, keep=keep, files=[carrier])
     if not c:
         raise ValueError(f"no steady tone found in {carrier}")
-    pop = None
-    if pop_file:
-        pop = _load(pop_file, 0.045)
-        f = int(0.015 * SR)
-        pop[-f:] *= np.linspace(1, 0, f)
     noise = ninchan.make_noise(noise_files, mix=0.6) if noise_files else None
-    with _hooks(ninchan.make_source([c[0][3]]), noise, ninchan.make_burst(clicks) if clicks else None, kaso_post(pop)):
+    with _hooks(airy_source(c[0][3], breath), noise, ninchan.make_burst(clicks) if clicks else None, None):
         root = synthbank.build(out, name)
-    if breath_file:                                           # her breath is a hand gesture, close and dry
-        br = _load(breath_file, 0.5)
-        f = int(0.06 * SR)
+    if breath_file:                                           # her breath is the opening swell of the Quest startup
+        br = _load(breath_file, 0.6)
+        f = int(0.1 * SR)
         br[:f] *= np.linspace(0, 1, f)
         br[-f:] *= np.linspace(1, 0, f)
         audio.write_wav(root / "br.wav", (br * 0.3).astype("float32"), SR)
         from .sfxbank import write_frq
         write_frq(root / "br_wav.frq", len(br))
-    n_pt = _passthrough_set(root) if passthrough_set else 0
     n = _merge_sfx(root, sfx_bank)
     (root / "readme.txt").write_text(
-        f"{name}\nA Japanese CV voicebank built on the Meta Quest. Tactile and close: dry, right at your ear like a hand "
-        "menu. Every syllable lands on the Quest UI 'drop' pop and blooms bright for a moment, like a fingertip on "
-        f"glass. Voice: MADO's synthesiser with a trace of the Quest '{carrier.stem}' tone; Quest clicks as k/t/p "
-        "releases; hand-gesture swipes for the hiss sounds and the breath (息 / br).\n"
-        f"Passthrough: {n_pt} samples again as heard through the headset cameras, alias + _P (あ_P, ka_P ...): "
-        "stair-stepped at a camera frame rate, grainy, low colour, with a little camera lag.\n"
-        f"{n} one-shot Quest sounds as quest_<name>.\n"
-        "Full effect: render with voice2utau.sing --engine psola, then voice2utau.quest (every phrase emerges from "
-        "passthrough, top notes touch the Guardian), then voice2utau.spatial, dry, for headphones.\n"
+        f"{name}\nA liminal, dreamy Japanese CV voicebank built on the Meta Quest. Her voice is a soft, rounded tone "
+        f"like the Quest home-menu chimes (from the Quest UI '{carrier.stem}' sound) carried on breath; real Quest "
+        "clicks as k/t/p releases; menu swipes and gestures for the hiss sounds; the opening swell of the Quest "
+        f"startup as her breath (息 / br). Same synthesiser as MADO.\n{n} one-shot Quest sounds as quest_<name>.\n"
+        "Full effect: render with voice2utau.sing --engine psola, then voice2utau.quest (an octave halo, like the "
+        "'success' chime, and a reverb made from the Quest startup sound), then voice2utau.spatial for headphones.\n"
         "The source sounds belong to Meta. Personal use only.\n", encoding="utf-8")
     return root
 
@@ -311,7 +272,6 @@ def main() -> None:
     ap.add_argument("--sfx-bank", type=Path)
     ap.add_argument("--name")
     ap.add_argument("--noise-files", type=Path, nargs="*", default=[])
-    ap.add_argument("--pop", type=Path, help="kaso: the Quest UI pop every syllable lands on")
     ap.add_argument("--breath", type=Path)
     a = ap.parse_args()
     if a.character == "ninchan":
@@ -323,7 +283,7 @@ def main() -> None:
     else:
         if not a.carrier:
             ap.error("kaso needs --carrier")
-        root = build_kaso(a.out, a.carrier, a.noise_files, a.clicks, a.pop, a.breath, a.sfx_bank, a.name or "Kaso")
+        root = build_kaso(a.out, a.carrier, a.noise_files, a.clicks, a.breath, a.sfx_bank, a.name or "Kaso")
     print(f"wrote {root}")
 
 
