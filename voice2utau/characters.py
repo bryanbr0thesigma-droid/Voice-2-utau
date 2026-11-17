@@ -6,7 +6,7 @@ nin-Chan (8-bit lineage): pulse-wave vowels (Game Boy / NES duty-cycle tone, per
 BAKO (sleek, ambient): a pad voice made from an Xbox sound's own cycle, a slow swell into
     each vowel, the dashboard's air whoosh arriving before every syllable, and a low hum an octave under the note.
 Kaso (Meta Quest, liminal and dreamy): a soft menu-chime tone carried on breath, Quest clicks as releases, the startup
-    swell as her breath; voice2utau.quest adds an octave halo and a reverb made from the Quest startup sound.
+    swell as her breath. Best dry (no reverb): render with --engine psola, then voice2utau.spatial for headphones.
 
     python -m voice2utau.characters ninchan OUT --clicks a.wav b.wav --noise-dirs DIR ... [--sfx-bank DIR]
     python -m voice2utau.characters bako OUT --carrier startup.wav --noise-dirs DIR ...  [--sfx-bank DIR]
@@ -255,8 +255,8 @@ def build_kaso(out: Path, carrier: Path, noise_files: list[Path], clicks: list[P
         f"like the Quest home-menu chimes (from the Quest UI '{carrier.stem}' sound) carried on breath; real Quest "
         "clicks as k/t/p releases; menu swipes and gestures for the hiss sounds; the opening swell of the Quest "
         f"startup as her breath (息 / br). Same synthesiser as MADO.\n{n} one-shot Quest sounds as quest_<name>.\n"
-        "Full effect: render with voice2utau.sing --engine psola, then voice2utau.quest (an octave halo, like the "
-        "'success' chime, and a reverb made from the Quest startup sound), then voice2utau.spatial for headphones.\n"
+        "Best kept dry, with no reverb: render with voice2utau.sing --engine psola; for headphones, place her with "
+        "voice2utau.spatial (a slow drift through the space in front of you).\n"
         "The source sounds belong to Meta. Personal use only.\n", encoding="utf-8")
     return root
 
