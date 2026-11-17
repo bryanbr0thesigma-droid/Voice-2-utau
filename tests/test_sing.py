@@ -55,3 +55,14 @@ def test_consonant_cap_keeps_consonants_at_or_below_their_vowel(tmp_path):
         v0, v1 = int((n.start + 0.03) * audio.SR_BANK), int((n.start + n.dur - 0.02) * audio.SR_BANK)
         fr = lambda s, e: np.sqrt((y[s:s + (e - s) // w * w].reshape(-1, w) ** 2).mean(1))
         assert 20 * np.log10(fr(a, b).max() / np.median(fr(v0, v1))) < 1.0, n.lyric
+
+
+def test_level_match_uses_sounding_loudness_not_peaks():
+    sr = audio.SR_BANK
+    t = np.arange(sr) / sr
+    quiet_with_spike = 0.05 * np.sin(2 * np.pi * 220 * t)
+    quiet_with_spike[1000] = 1.0                                   # one hot sample would dominate peak scaling
+    loud = 0.4 * np.sin(2 * np.pi * 220 * t)
+    a, b = sing.level_match(quiet_with_spike.astype("float32")), sing.level_match(loud.astype("float32"))
+    ra, rb = np.sqrt((a[2000:] ** 2).mean()), np.sqrt((b[2000:] ** 2).mean())
+    assert abs(20 * np.log10(ra / rb)) < 1.0

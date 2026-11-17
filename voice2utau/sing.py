@@ -339,6 +339,21 @@ def _cap_to(y: np.ndarray, c_end: int, v0: int, v1: int, cap_db: float) -> np.nd
     return y
 
 
+def level_match(y: np.ndarray, target_db: float = -20.0) -> np.ndarray:
+    """Scale a rendered track so the RMS of its sounding 50 ms windows is target_db (peak scaling let one hot note
+    make a whole track ~9 dB quieter than another)."""
+    w = int(0.05 * SR)
+    n = len(y) // w
+    if n == 0:
+        return y
+    r = np.sqrt((y[:n * w].reshape(n, w) ** 2).mean(1))
+    on = r > r.max() * 10 ** (-40 / 20)
+    if not on.any():
+        return y
+    cur = float(np.sqrt((r[on] ** 2).mean()))
+    return y * (10 ** (target_db / 20) / max(cur, 1e-9))
+
+
 def main() -> None:
     import argparse
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
@@ -354,6 +369,7 @@ def main() -> None:
     mix = None
     for k, u in enumerate(a.ust):
         y, info = eng.render(parse_ust(u))
+        y = level_match(y)                     # each track scaled by its singing loudness, not by its single loudest peak
         g = (a.gain[k] if a.gain and k < len(a.gain) else (0.0 if k == 0 else -6.0))
         y = y * 10 ** (g / 20)
         mix = y if mix is None else np.pad(mix, (0, max(0, len(y) - len(mix)))) + np.pad(y, (0, max(0, len(mix) - len(y))))
