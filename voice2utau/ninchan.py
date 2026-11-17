@@ -120,11 +120,12 @@ def flatten(wt: np.ndarray, keep: float = 0.3, smooth: int = 5) -> np.ndarray:
     return y / max(1e-9, np.abs(y).max())
 
 
-def pick_carriers(dirs: list[Path], top: int = 3, max_wobble: float = 25.0) -> list[tuple[str, float, int, np.ndarray]]:
+def pick_carriers(dirs: list[Path], top: int = 3, max_wobble: float = 25.0, keep: float = 0.3,
+                  files: list[Path] | None = None) -> list[tuple[str, float, int, np.ndarray]]:
     """[(file, f0, richness, flattened wavetable)] for the richest steady tonal sounds."""
     out = []
-    for d in dirs:
-        for p in sorted(Path(d).rglob("*.wav")):
+    paths = [Path(f) for f in files] if files else [p for d in dirs for p in sorted(Path(d).rglob("*.wav"))]
+    for p in paths:
             x, sr = audio.read_wav(p)
             if len(x) < sr * 0.12:
                 continue
@@ -137,7 +138,7 @@ def pick_carriers(dirs: list[Path], top: int = 3, max_wobble: float = 25.0) -> l
             if best is not None:
                 out.append((str(p), best[0], best[1], best[2]))
     out.sort(key=lambda r: -r[2])
-    return [(f, f0, r, flatten(wt)) for f, f0, r, wt in out[:top]]
+    return [(f, f0, r, flatten(wt, keep)) for f, f0, r, wt in out[:top]]
 
 
 def make_source(tables: list[np.ndarray], weights: list[float] | None = None):
@@ -194,6 +195,36 @@ def make_noise(files: list[Path], seconds: float = 12.0, seed: int = 0, mix: flo
     return noise
 
 
+def make_burst(files: list[Path]):
+    """BURST_FN for synthbank: the attack of a real system click, lightly tilted by place (lips low, tongue tip high)."""
+    from scipy.signal import butter, sosfilt
+    atk = []
+    for p in files:
+        x, sr = audio.read_wav(p)
+        x = audio.resample(x, sr, SR) if sr != SR else x
+        if len(x) < int(0.01 * SR):
+            continue
+        a = int(np.argmax(np.abs(x) > 0.2 * np.abs(x).max()))
+        seg = x[max(0, a - int(0.001 * SR)):a + int(0.04 * SR)]
+        atk.append(seg / max(1e-9, np.abs(seg).max()))
+    if not atk:
+        raise ValueError("no usable click sounds")
+    filt = {"lab": butter(2, 2000, "low", fs=SR, output="sos"), "alv": butter(2, 3000, "high", fs=SR, output="sos"),
+            "vel": butter(2, [1200, 4000], "band", fs=SR, output="sos"), "pal": butter(2, [2000, 6000], "band", fs=SR, output="sos")}
+
+    def burst(n: int, place: str, rng: np.random.Generator) -> np.ndarray:
+        c = atk[int(rng.integers(len(atk)))]
+        y = np.zeros(n)
+        m = min(n, len(c))
+        y[:m] = c[:m]
+        if place in filt:                                   # half the original click, half place-shaped
+            f = sosfilt(filt[place], y)
+            y = 0.5 * y + 0.5 * f / max(1e-9, np.abs(f).max())
+        y *= np.exp(-np.arange(n) / max(1.0, n / 2.5))
+        return y / max(1e-9, np.abs(y).max())
+    return burst
+
+
 def noisy_files(dirs: list[Path], max_hnr: float = 3.0, limit: int = 12) -> list[Path]:
     import parselmouth
     rows = []
@@ -210,24 +241,31 @@ def noisy_files(dirs: list[Path], max_hnr: float = 3.0, limit: int = 12) -> list
 
 
 @contextlib.contextmanager
-def nintendo_voice(dirs: list[Path], top: int = 3):
-    carriers = pick_carriers(dirs, top)
+def nintendo_voice(dirs: list[Path], top: int = 3, keep: float = 0.3, noise_mix: float = 0.5,
+                   carrier_files: list[Path] | None = None, click_files: list[Path] | None = None):
+    """keep / noise_mix / click_files are the 'charm' controls: more of the console's own sound, less generic voice."""
+    carriers = pick_carriers(dirs, top, keep=keep, files=carrier_files)
     if not carriers:
         raise ValueError("no steady tonal sound found to use as the voice")
     noisy = noisy_files(dirs)
-    old = synthbank.SOURCE_FN, synthbank.NOISE_FN
+    old = synthbank.SOURCE_FN, synthbank.NOISE_FN, synthbank.BURST_FN
     synthbank.SOURCE_FN = make_source([c[3] for c in carriers], [c[2] for c in carriers])
     if noisy:
-        synthbank.NOISE_FN = make_noise(noisy)
+        synthbank.NOISE_FN = make_noise(noisy, mix=noise_mix)
+    if click_files:
+        synthbank.BURST_FN = make_burst(click_files)
     try:
         yield {"carriers": [(Path(f).name, round(f0, 1), r) for f, f0, r, _ in carriers],
-               "noise": [Path(p).name for p in noisy]}
+               "noise": [Path(p).name for p in noisy], "clicks": [Path(p).name for p in (click_files or [])],
+               "keep": keep, "noise_mix": noise_mix}
     finally:
-        synthbank.SOURCE_FN, synthbank.NOISE_FN = old
+        synthbank.SOURCE_FN, synthbank.NOISE_FN, synthbank.BURST_FN = old
 
 
-def build(dirs: list[Path], out_dir: Path, name: str = "nin-Chan", top: int = 3, brand: str = "Nintendo") -> tuple[Path, dict]:
-    with nintendo_voice(dirs, top) as info:
+def build(dirs: list[Path], out_dir: Path, name: str = "nin-Chan", top: int = 3, brand: str = "Nintendo",
+          keep: float = 0.3, noise_mix: float = 0.5, carrier_files: list[Path] | None = None,
+          click_files: list[Path] | None = None) -> tuple[Path, dict]:
+    with nintendo_voice(dirs, top, keep, noise_mix, carrier_files, click_files) as info:
         root = synthbank.build(out_dir, name)
     (root / "readme.txt").write_text(
         f"{name}\nA Japanese CV voicebank whose voice is made of {brand} system sounds: the vowels are a pitch period cut "
@@ -246,9 +284,13 @@ def main() -> None:
     ap.add_argument("--name", default="nin-Chan")
     ap.add_argument("--top", type=int, default=3, help="how many tonal sounds to blend into the voice")
     ap.add_argument("--brand", default="Nintendo", help="whose system sounds these are (for the readme)")
+    ap.add_argument("--keep", type=float, default=0.3, help="0..1: how much of the source's own harmonic pattern stays (charm)")
+    ap.add_argument("--noise-mix", type=float, default=0.5, help="0..1: share of console noise vs white noise in consonants")
+    ap.add_argument("--carrier", type=Path, nargs="*", help="use these files for the voice instead of the richest ones")
+    ap.add_argument("--clicks", type=Path, nargs="*", help="system click sounds to use as k/t/p/ch release bursts")
     a = ap.parse_args()
-    root, info = build(a.dirs, a.out, a.name, a.top, a.brand)
-    print(f"wrote {root}\nvoice from: {info['carriers']}\nnoise from: {info['noise']}")
+    root, info = build(a.dirs, a.out, a.name, a.top, a.brand, a.keep, a.noise_mix, a.carrier, a.clicks)
+    print(f"wrote {root}\nvoice from: {info['carriers']}\nnoise from: {info['noise']}\nclicks: {info['clicks']}")
 
 
 if __name__ == "__main__":

@@ -101,6 +101,8 @@ def _track(loc: float, tgt: float, n: int, c: int, tr: int) -> np.ndarray:
 # NOISE_FN(n, rng) -> broadband noise. None = the built-in glottal pulses / white noise.
 SOURCE_FN = None
 NOISE_FN = None
+# BURST_FN(n_samples, place, rng) -> a stop/affricate release burst (e.g. a slice of a real button click)
+BURST_FN = None
 
 
 def _noise(n: int, rng: np.random.Generator) -> np.ndarray:
@@ -211,7 +213,8 @@ def synth(m: Mora, rng: np.random.Generator | None = None) -> tuple[np.ndarray, 
     elif kind in ("stop_v", "stop_d"):
         bcf, bbw, blev = _burst_spec(ex.get("bp", place), m.vowel)
         bl = int(0.015 * SR)
-        burst = _band_noise(bl, bcf, bbw, 400.0, rng) * np.exp(-np.arange(bl) / (bl / 2.5))
+        burst = (BURST_FN(bl, ex.get("bp", place), rng) if BURST_FN is not None
+                 else _band_noise(bl, bcf, bbw, 400.0, rng) * np.exp(-np.arange(bl) / (bl / 2.5)))
         if kind == "stop_v":
             fric[cl:cl + bl] += burst * 4.0 * blev
             if place in ("vel", "pal"):                        # velars often release with a second, smaller burst
@@ -235,7 +238,9 @@ def synth(m: Mora, rng: np.random.Generator | None = None) -> tuple[np.ndarray, 
         if kind.startswith("aff"):
             bcf, bbw, _ = _burst_spec(place, m.vowel)
             bl = int(0.010 * SR)
-            fric[cl:cl + bl] += _band_noise(bl, bcf, bbw, 400.0, rng) * np.exp(-np.arange(bl) / (bl / 2.5)) * 5.0
+            b = (BURST_FN(bl, place, rng) if BURST_FN is not None
+                 else _band_noise(bl, bcf, bbw, 400.0, rng) * np.exp(-np.arange(bl) / (bl / 2.5)))
+            fric[cl:cl + bl] += b * 5.0
         if kind.endswith("_v"):
             voiced = np.where(idx < c, 0.5, 1.0) * _ramp(n, 0, int(0.012 * SR))
             if kind == "aff_v":

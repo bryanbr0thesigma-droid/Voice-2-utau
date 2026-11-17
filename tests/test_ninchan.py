@@ -38,3 +38,20 @@ def test_build_uses_nintendo_sources_and_restores_the_synth(tmp_path):
         y, pre = synthbank.synth(MORAE["ka"], np.random.default_rng(2))
         assert np.isfinite(y).all() and np.abs(y).max() > 0.1
     assert synthbank.SOURCE_FN is None and synthbank.NOISE_FN is None
+
+
+def test_click_bursts_replace_the_noise_burst(tmp_path):
+    d = tmp_path / "snd"
+    d.mkdir()
+    _tone(d / "chime.wav", 523.25)
+    clk = np.zeros(4410, dtype="float32")
+    clk[100:140] = np.hanning(40) * 0.8                                    # a short click
+    audio.write_wav(d / "click.wav", clk, audio.SR_BANK)
+    burst = ninchan.make_burst([d / "click.wav"])
+    b = burst(600, "vel", np.random.default_rng(0))
+    assert len(b) == 600 and np.abs(b).max() == 1.0 and np.abs(b[-50:]).max() < 0.2
+    with ninchan.nintendo_voice([d], top=1, keep=0.8, noise_mix=0.9, click_files=[d / "click.wav"]) as info:
+        assert synthbank.BURST_FN is not None and info["clicks"] == ["click.wav"] and info["keep"] == 0.8
+        y, _ = synthbank.synth(MORAE["ka"], np.random.default_rng(2))
+        assert np.isfinite(y).all()
+    assert synthbank.BURST_FN is None
