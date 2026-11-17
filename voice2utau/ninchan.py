@@ -30,20 +30,36 @@ def _pitch(x: np.ndarray, sr: int) -> np.ndarray:
     return p.selected_array["frequency"]
 
 
-def steady_window(x: np.ndarray, sr: int, win_s: float = 0.08) -> tuple[int, float, float] | None:
-    """(start sample, f0, wobble cents) of the most stable fully voiced window."""
+def steady_windows(x: np.ndarray, sr: int, win_s: float = 0.08, k: int = 25,
+                   max_wobble: float = 25.0) -> list[tuple[int, float, float]]:
+    """Up to k non-overlapping fully voiced windows, steadiest first: [(start sample, f0, wobble cents)]."""
     f = _pitch(x, sr)
     w = max(3, int(win_s / 0.01))
-    best = None
+    cands = []
     for i in range(0, len(f) - w):
         seg = f[i:i + w]
         if (seg <= 0).any():
             continue
         f0 = float(np.median(seg))
         wob = float(np.std(1200 * np.log2(seg / f0)))
-        if best is None or wob < best[2]:
-            best = (int(i * 0.01 * sr), f0, wob)
-    return best
+        if wob <= max_wobble:
+            cands.append((wob, i, f0))
+    cands.sort()
+    out, used = [], []
+    for wob, i, f0 in cands:
+        if any(abs(i - j) < w for j in used):
+            continue
+        used.append(i)
+        out.append((int(i * 0.01 * sr), f0, wob))
+        if len(out) >= k:
+            break
+    return out
+
+
+def steady_window(x: np.ndarray, sr: int, win_s: float = 0.08) -> tuple[int, float, float] | None:
+    """(start sample, f0, wobble cents) of the most stable fully voiced window."""
+    w = steady_windows(x, sr, win_s, k=1, max_wobble=1e9)
+    return w[0] if w else None
 
 
 def wavetable(x: np.ndarray, sr: int, start: int, f0: float, periods: int = 8) -> np.ndarray:
@@ -112,11 +128,14 @@ def pick_carriers(dirs: list[Path], top: int = 3, max_wobble: float = 25.0) -> l
             x, sr = audio.read_wav(p)
             if len(x) < sr * 0.12:
                 continue
-            sw = steady_window(x, sr)
-            if sw is None or sw[2] > max_wobble:
-                continue
-            wt = wavetable(x, sr, sw[0], sw[1])
-            out.append((str(p), sw[1], richness(wt), wt))
+            best = None
+            for start, f0, wob in steady_windows(x, sr, max_wobble=max_wobble):   # richest of the steadiest windows
+                wt = wavetable(x, sr, start, f0)
+                r = richness(wt)
+                if best is None or r > best[1]:
+                    best = (f0, r, wt)
+            if best is not None:
+                out.append((str(p), best[0], best[1], best[2]))
     out.sort(key=lambda r: -r[2])
     return [(f, f0, r, flatten(wt)) for f, f0, r, wt in out[:top]]
 
@@ -207,15 +226,15 @@ def nintendo_voice(dirs: list[Path], top: int = 3):
         synthbank.SOURCE_FN, synthbank.NOISE_FN = old
 
 
-def build(dirs: list[Path], out_dir: Path, name: str = "nin-Chan", top: int = 3) -> tuple[Path, dict]:
+def build(dirs: list[Path], out_dir: Path, name: str = "nin-Chan", top: int = 3, brand: str = "Nintendo") -> tuple[Path, dict]:
     with nintendo_voice(dirs, top) as info:
         root = synthbank.build(out_dir, name)
     (root / "readme.txt").write_text(
-        f"{name}\nA Japanese CV voicebank whose voice is made of Nintendo system sounds: the vowels are a pitch period cut "
+        f"{name}\nA Japanese CV voicebank whose voice is made of {brand} system sounds: the vowels are a pitch period cut "
         f"from {', '.join(c[0] for c in info['carriers'])} (looped at C4, shaped into vowels), the consonant noise is made "
         f"from {len(info['noise'])} noisy system sounds. Same synthesiser as MADO (voice2utau.synthbank).\n"
         "Aliases: hiragana (か) and romaji (ka); ん is also 'n'; 息 / br is a breath.\n"
-        "The source sounds belong to Nintendo. Personal use only - do not redistribute.\n", encoding="utf-8")
+        f"The source sounds belong to {'Microsoft' if brand == 'Xbox' else brand}. Personal use only - do not redistribute.\n", encoding="utf-8")
     return root, info
 
 
@@ -226,8 +245,9 @@ def main() -> None:
     ap.add_argument("-o", "--out", type=Path, required=True)
     ap.add_argument("--name", default="nin-Chan")
     ap.add_argument("--top", type=int, default=3, help="how many tonal sounds to blend into the voice")
+    ap.add_argument("--brand", default="Nintendo", help="whose system sounds these are (for the readme)")
     a = ap.parse_args()
-    root, info = build(a.dirs, a.out, a.name, a.top)
+    root, info = build(a.dirs, a.out, a.name, a.top, a.brand)
     print(f"wrote {root}\nvoice from: {info['carriers']}\nnoise from: {info['noise']}")
 
 
