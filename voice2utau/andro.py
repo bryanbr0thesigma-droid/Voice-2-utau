@@ -154,18 +154,41 @@ def merge_set(core: Path, part: Path, suffix: str) -> int:
     return len(done)
 
 
-def add_oneshots(root: Path, sfx: Path | None, sub: str = "oneshots") -> int:
-    """Put the one-shot bank in its own sub-folder with its own oto.ini (UTAU reads oto.ini in sub-folders), so the
-    voice and the much larger one-shot set can be shipped as separate downloads into the same bank folder."""
+def add_oneshots(root: Path, sfx: Path | None, max_mb: float = 380.0) -> dict[str, list[str]]:
+    """Put the one-shots in sub-folders (oneshots_1, oneshots_2, ...) each with its own oto.ini (UTAU reads oto.ini in
+    sub-folders). Whole brands are packed into folders of at most ~max_mb, so each can ship as its own download (the
+    full set is ~1 GB) and all of them unzip into the same bank folder. Returns {folder: [brands]}."""
     if not sfx or not (Path(sfx) / "oto.ini").exists():
-        return 0
-    dst = root / sub
-    shutil.rmtree(dst, ignore_errors=True)
-    dst.mkdir(parents=True)
-    for p in Path(sfx).iterdir():
-        if p.suffix.lower() in (".wav", ".frq") or p.name == "oto.ini":
-            shutil.copy2(p, dst / p.name)
-    return sum(1 for l in (dst / "oto.ini").read_bytes().decode("cp932").splitlines() if "=" in l)
+        return {}
+    sfx = Path(sfx)
+    lines = [l for l in (sfx / "oto.ini").read_bytes().decode("cp932").splitlines() if "=" in l]
+    by_brand: dict[str, list[str]] = {}
+    for l in lines:
+        by_brand.setdefault(l.split("=", 1)[0].split("_", 1)[0], []).append(l)
+    size = {b: sum((sfx / w).stat().st_size for w in {l.split("=", 1)[0] for l in ls}) for b, ls in by_brand.items()}
+    folders: list[list[str]] = []
+    for b in sorted(size, key=lambda k: -size[k]):                 # largest brands first, first folder that fits
+        for f in folders:
+            if sum(size[x] for x in f) + size[b] <= max_mb * 1e6:
+                f.append(b)
+                break
+        else:
+            folders.append([b])
+    for old in root.glob("oneshots*"):
+        shutil.rmtree(old, ignore_errors=True)
+    out = {}
+    for i, f in enumerate(folders, 1):
+        dst = root / f"oneshots_{i}"
+        dst.mkdir(parents=True)
+        keep = [l for b in f for l in by_brand[b]]
+        for w in {l.split("=", 1)[0] for l in keep}:
+            shutil.copy2(sfx / w, dst / w)
+            frq = sfx / (w[:-4] + "_wav.frq")
+            if frq.exists():
+                shutil.copy2(frq, dst / frq.name)
+        (dst / "oto.ini").write_bytes(("\r\n".join(keep) + "\r\n").encode("cp932", "replace"))
+        out[dst.name] = sorted(f)
+    return out
 
 
 def build(stage: Path, out: Path, name: str = "ANDRO", brands: list[str] | None = None, exclude: set[str] = frozenset(),
@@ -211,15 +234,19 @@ def build(stage: Path, out: Path, name: str = "ANDRO", brands: list[str] | None 
             report["brands"][b] = {"files": n_files, "built": True, "samples": n,
                                    "tone": [Path(c[0]).name for c in carriers]}
     shutil.rmtree(tmp, ignore_errors=True)
-    report["one_shots"] = add_oneshots(root, sfx_bank)
+    report["one_shot_folders"] = add_oneshots(root, sfx_bank)
+    report["one_shots"] = sum(1 for d in report["one_shot_folders"]
+                              for l in (root / d / "oto.ini").read_bytes().decode("cp932").splitlines() if "=" in l)
     built = [b for b in brands if report["brands"][b].get("built")]
     lines = "\n".join(f"  _{b:5s} {BRANDS[b]}" for b in built)
     (root / "readme.txt").write_text(
         f"{name}\nA male Japanese CV voicebank built from the sounds of Android devices: one guy, many brands.\n\n"
         f"Default voice (no suffix): a blend of every brand - each brand's tone, hiss and clicks pooled into one singer.\n"
         f"Brand colours: add the suffix to any lyric (あ_sam, ka_pix, 息_moto ...) to sing as that brand alone:\n{lines}\n\n"
-        f"One-shots (oneshots/ folder, its own download): {report['one_shots']} system sounds (ringtones, "
-        "notifications, UI, startup) as <brand>_<name>, ringtones cut to 10 s. Unzip it into this folder.\n"
+        f"One-shots: {report['one_shots']} system sounds (ringtones, notifications, UI, startup) as <brand>_<name>, "
+        "ringtones cut to 10 s, in sub-folders that each come as their own download: "
+        + "; ".join(f"{d}: {', '.join(bs)}" for d, bs in report["one_shot_folders"].items())
+        + ". Unzip them into this folder.\n"
         "No recorded human voice is used anywhere: every clip was screened by an audio classifier and by name.\n"
         f"Pitch: samples at C3 ({MALE_F0:.2f} Hz). Same synthesiser as MADO, with a male vocal tract.\n"
         "Render with voice2utau.sing --engine psola to keep each brand's timbre.\n"
