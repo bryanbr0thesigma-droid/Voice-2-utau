@@ -20,7 +20,7 @@ from pathlib import Path
 import numpy as np
 
 from . import audio, ninchan, synthbank
-from .characters import _hooks, _merge_sfx
+from .characters import _hooks
 
 SR = synthbank.SR
 MALE_F0 = 130.81                  # C3
@@ -70,6 +70,35 @@ def _trimmed(p: Path) -> np.ndarray:
     return x[a:b]
 
 
+def _norm(s: str) -> str:
+    import re
+    return re.sub(r"[^a-z0-9]", "", s.lower())
+
+
+def stock_names(and_dir: Path) -> set[str]:
+    """Normalised names of the stock Android (AOSP) sounds, which many brands ship unchanged."""
+    out = set()
+    for p in Path(and_dir).glob("aosp*.wav"):
+        n = _norm(p.stem.split("_", 2)[-1] if p.stem.startswith("aosp_material_") else p.stem.split("_", 1)[-1])
+        if len(n) >= 6:
+            out.add(n)
+    return out
+
+
+def is_stock(p: Path, stock: set[str]) -> bool:
+    """A brand file that is really a stock Android sound (name after the device prefix starts with an AOSP name)."""
+    n = _norm(p.stem.split("_", 1)[-1])
+    return any(n.startswith(s) for s in stock)
+
+
+def spread(files: list[Path], n: int) -> list[Path]:
+    """Up to n files evenly across the list (not just the first n alphabetically)."""
+    if len(files) <= n:
+        return files
+    idx = np.linspace(0, len(files) - 1, n).round().astype(int)
+    return [files[i] for i in sorted(set(idx))]
+
+
 def roles(files: list[Path]) -> dict[str, list[Path]]:
     """Sort a brand's sounds: clicks (short, sharp: become k/t/p releases), noisy (become consonant hiss), and the
     rest (voice tone candidates)."""
@@ -94,12 +123,12 @@ def roles(files: list[Path]) -> dict[str, list[Path]]:
 
 def voice_parts(r: dict[str, list[Path]], top: int = 3, keep: float = 0.4):
     """(source, noise, burst, carriers) hooks for one brand (or for the pooled core)."""
-    carriers = ninchan.pick_carriers([], top=top, keep=keep, files=r["tonal"][:400])
+    carriers = ninchan.pick_carriers([], top=top, keep=keep, files=spread(r["tonal"], 300))
     if not carriers:
         return None
     source = ninchan.make_source([c[3] for c in carriers])
-    noise = ninchan.make_noise(r["noisy"][:40], mix=0.6) if r["noisy"] else None
-    burst = ninchan.make_burst(r["clicks"][:40]) if r["clicks"] else None
+    noise = ninchan.make_noise(spread(r["noisy"], 40), mix=0.6) if r["noisy"] else None
+    burst = ninchan.make_burst(spread(r["clicks"], 40)) if r["clicks"] else None
     return source, noise, burst, carriers
 
 
@@ -125,13 +154,30 @@ def merge_set(core: Path, part: Path, suffix: str) -> int:
     return len(done)
 
 
+def add_oneshots(root: Path, sfx: Path | None, sub: str = "oneshots") -> int:
+    """Put the one-shot bank in its own sub-folder with its own oto.ini (UTAU reads oto.ini in sub-folders), so the
+    voice and the much larger one-shot set can be shipped as separate downloads into the same bank folder."""
+    if not sfx or not (Path(sfx) / "oto.ini").exists():
+        return 0
+    dst = root / sub
+    shutil.rmtree(dst, ignore_errors=True)
+    dst.mkdir(parents=True)
+    for p in Path(sfx).iterdir():
+        if p.suffix.lower() in (".wav", ".frq") or p.name == "oto.ini":
+            shutil.copy2(p, dst / p.name)
+    return sum(1 for l in (dst / "oto.ini").read_bytes().decode("cp932").splitlines() if "=" in l)
+
+
 def build(stage: Path, out: Path, name: str = "ANDRO", brands: list[str] | None = None, exclude: set[str] = frozenset(),
           sfx_bank: Path | None = None, keep: float = 0.4) -> tuple[Path, dict]:
     stage = Path(stage)
     brands = [b for b in (brands or list(BRANDS)) if (stage / b).is_dir()]
     files = {b: sorted(p for p in (stage / b).rglob("*.wav") if str(p) not in exclude and not named_like_voice(p))
              for b in brands}
-    rl = {b: roles(files[b]) for b in brands}
+    stock = stock_names(stage / "and") if (stage / "and").is_dir() else set()
+    own = {b: (files[b] if b == "and" else [p for p in files[b] if not is_stock(p, stock)]) for b in brands}
+    own = {b: (own[b] or files[b]) for b in brands}           # a brand with only stock sounds keeps them
+    rl = {b: roles(own[b]) for b in brands}
     report = {"brands": {}, "core": {}}
     tmp = out / "_parts"
     with male():
@@ -140,8 +186,8 @@ def build(stage: Path, out: Path, name: str = "ANDRO", brands: list[str] | None 
         tones = []
         for b in brands:
             for k in pooled:
-                pooled[k] += rl[b][k][:12]
-            best = ninchan.pick_carriers([], top=1, keep=keep, files=rl[b]["tonal"][:400])
+                pooled[k] += spread(rl[b][k], 12)
+            best = ninchan.pick_carriers([], top=1, keep=keep, files=spread(rl[b]["tonal"], 300))
             if best:
                 tones.append(best[0][3])
                 report["core"][b] = Path(best[0][0]).name
@@ -154,6 +200,7 @@ def build(stage: Path, out: Path, name: str = "ANDRO", brands: list[str] | None 
         for b in brands:
             parts = voice_parts(rl[b], keep=keep)
             n_files = {k: len(v) for k, v in rl[b].items()}
+            n_files["stock_skipped"] = len(files[b]) - len(own[b])
             if parts is None:
                 report["brands"][b] = {"files": n_files, "built": False}
                 continue
@@ -164,14 +211,15 @@ def build(stage: Path, out: Path, name: str = "ANDRO", brands: list[str] | None 
             report["brands"][b] = {"files": n_files, "built": True, "samples": n,
                                    "tone": [Path(c[0]).name for c in carriers]}
     shutil.rmtree(tmp, ignore_errors=True)
-    report["one_shots"] = _merge_sfx(root, sfx_bank)
+    report["one_shots"] = add_oneshots(root, sfx_bank)
     built = [b for b in brands if report["brands"][b].get("built")]
     lines = "\n".join(f"  _{b:5s} {BRANDS[b]}" for b in built)
     (root / "readme.txt").write_text(
         f"{name}\nA male Japanese CV voicebank built from the sounds of Android devices: one guy, many brands.\n\n"
         f"Default voice (no suffix): a blend of every brand - each brand's tone, hiss and clicks pooled into one singer.\n"
         f"Brand colours: add the suffix to any lyric (あ_sam, ka_pix, 息_moto ...) to sing as that brand alone:\n{lines}\n\n"
-        f"One-shots: {report['one_shots']} system sounds (ringtones, notifications, UI, startup) as <brand>_<name>.\n"
+        f"One-shots (oneshots/ folder, its own download): {report['one_shots']} system sounds (ringtones, "
+        "notifications, UI, startup) as <brand>_<name>, ringtones cut to 10 s. Unzip it into this folder.\n"
         "No recorded human voice is used anywhere: every clip was screened by an audio classifier and by name.\n"
         f"Pitch: samples at C3 ({MALE_F0:.2f} Hz). Same synthesiser as MADO, with a male vocal tract.\n"
         "Render with voice2utau.sing --engine psola to keep each brand's timbre.\n"

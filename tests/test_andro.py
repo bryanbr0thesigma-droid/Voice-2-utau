@@ -53,3 +53,21 @@ def test_excluded_paths_read_from_screen(tmp_path):
     t = tmp_path / "x.tsv"
     t.write_text("0.910\tSpeech\tSpeech\t/s/moto/a.wav\n", encoding="utf-8")
     assert andro.read_excluded(t) == {"/s/moto/a.wav"}
+
+
+def test_stock_sounds_recognised_in_brand_folders(tmp_path):
+    a = tmp_path / "and"; a.mkdir()
+    for n in ["aosp_Alarm_Beep_01", "aosp_material_Hassium", "aosp_Tick"]:
+        (a / f"{n}.wav").write_bytes(b"")
+    stock = andro.stock_names(a)
+    assert {"alarmbeep01", "hassium"} <= stock and "tick" not in stock          # too short to match safely
+    assert andro.is_stock(Path("z2_Alarm_Beep_01_alarms_Sony_Xperia_Z2.wav"), stock)
+    assert andro.is_stock(Path("oneui5_Hassium.wav"), stock)
+    assert not andro.is_stock(Path("oneui5_Over_the_Horizon.wav"), stock)
+
+
+def test_spread_takes_files_across_the_list():
+    fs = [Path(f"{i:03d}.wav") for i in range(100)]
+    got = andro.spread(fs, 5)
+    assert len(got) == 5 and got[0] == fs[0] and got[-1] == fs[-1]
+    assert andro.spread(fs[:3], 5) == fs[:3]
