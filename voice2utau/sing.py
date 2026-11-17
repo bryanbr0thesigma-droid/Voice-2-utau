@@ -193,11 +193,25 @@ def envelope(n: Note, L: int) -> np.ndarray:
 
 
 class Engine:
-    def __init__(self, bank: Path):
+    def __init__(self, bank: Path, keep_level: bool = False, consonant_cap_db: float | None = None):
+        """keep_level: every note keeps the vowel loudness of its source sample (WORLD's output level swings with the
+        pitch shift, by up to ~13 dB at +2.5 octaves). consonant_cap_db: no 10 ms of a note's consonant may be louder
+        than its own rendered vowel plus this many dB (None = off)."""
         import pyworld  # noqa: F401
         self.bank = Path(bank)
         self.oto = read_oto(self.bank)
         self.cache: dict[tuple, tuple] = {}
+        self.keep_level, self.cap_db = keep_level, consonant_cap_db
+        self.ref_level: dict[tuple, float] = {}
+
+    def source_vowel_rms(self, wav: str, off: float, cons: float, cut: float) -> float:
+        key = (wav, off, cut)
+        if key not in self.ref_level:
+            x, sr = audio.read_wav(Path(wav))
+            a = int((off + cons) / 1000 * sr) + int(0.03 * sr)
+            seg = x[a:a + int(0.2 * sr)]
+            self.ref_level[key] = float(np.sqrt((seg ** 2).mean())) if len(seg) else 0.0
+        return self.ref_level[key]
 
     def analyse(self, wav: str, off: float, cut: float):
         key = (wav, off, cut)
@@ -223,6 +237,7 @@ class Engine:
         out = np.zeros(int(total * SR) + SR)
         missing: dict[str, int] = {}
         voiced = [i for i, n in enumerate(notes) if n.lyric not in SILENT]
+        regions: list[tuple[float, float, float]] = []
         for j, i in enumerate(voiced):
             n = notes[i]
             alias = resolve(n.lyric, self.oto)
@@ -266,15 +281,62 @@ class Engine:
             hz = 440.0 * 2 ** ((cents[fr] / 100 - 69) / 12)
             nf0 = np.where(f0[ii] > 0, hz, 0.0)
             y = pw.synthesize(np.ascontiguousarray(nf0), np.ascontiguousarray(sp[ii]), np.ascontiguousarray(ap[ii]), SR, FP)
+            if self.keep_level or self.cap_db is not None:
+                from .synthbank import cap_consonant
+                c_end = int(cons_out * FP / 1000 * SR)                       # end of the (velocity-scaled) consonant
+                v0 = c_end + int(0.03 * SR)
+                vow = y[v0:v0 + int(0.2 * SR)]
+                if len(vow) > int(0.04 * SR):
+                    if self.keep_level:
+                        ref, now = self.source_vowel_rms(wav, off, cons, cut), float(np.sqrt((vow ** 2).mean()))
+                        if ref > 0 and now > 0:
+                            y = y * float(np.clip(ref / now, 10 ** (-12 / 20), 10 ** (18 / 20)))
             y = y * envelope(n, len(y)) * (n.intensity / 100.0)
+            if self.cap_db is not None:
+                # after the envelope, so the consonant is compared with the vowel as it will be heard
+                c_end = int(cons_out * FP / 1000 * SR)
+                v0 = c_end + int(0.03 * SR)
+                v1 = min(len(y), int((pre + n.dur * 1000) / 1000 * SR) - int(0.02 * SR))   # this note's own vowel
+                if c_end > 0 and v1 - v0 > int(0.04 * SR):
+                    y = _cap_to(y, c_end, v0, v1, self.cap_db)
             fi = min(len(y), int(max(ovl, 3.0) / 1000 * SR))                       # cross-fade in over the overlap
             y[:fi] *= np.linspace(0, 1, fi)
             s = int(t0 * SR)
             if s < 0:
                 y, s = y[-s:], 0
             out[s:s + len(y)] += y[:len(out) - s]
+            regions.append((n.start - pre / 1000 + ovl / 1000, n.start, n.start + n.dur))
+        if self.cap_db is not None:
+            # final pass on the summed track: each note's consonant (after the previous note's overlap) may not be
+            # louder than that note's vowel as it actually sounds in context
+            for c0, c1, e in regions:
+                a, b = int((c0 + 0.002) * SR), int(c1 * SR)
+                v0, v1 = int((c1 + 0.03) * SR), int((e - 0.02) * SR)
+                if b - a > int(0.01 * SR) and v1 - v0 > int(0.04 * SR) and a >= 0:
+                    seg = out[a:v1].copy()
+                    out[a:v1] = _cap_to(seg, b - a, v0 - a, v1 - a, self.cap_db)
         peak = float(np.abs(out).max()) or 1.0
         return (out / peak * 0.89).astype("float32"), {"notes": len(voiced), "missing": missing, "seconds": round(total, 1)}
+
+
+def _cap_to(y: np.ndarray, c_end: int, v0: int, v1: int, cap_db: float) -> np.ndarray:
+    """Limit y[:c_end] so no 10 ms is louder than the median 10 ms level of y[v0:v1] + cap_db."""
+    w = int(0.01 * SR)
+    vow = y[v0:v1]
+    nv = len(vow) // w
+    if nv < 3:
+        return y
+    target = float(np.median(np.sqrt((vow[:nv * w].reshape(nv, w) ** 2).mean(1)))) * 10 ** (cap_db / 20)
+    hop = w // 2
+    starts = np.arange(0, max(1, c_end - w + 1), hop)
+    lvl = np.array([np.sqrt((y[s:s + w] ** 2).mean()) for s in starts])
+    g = np.minimum(1.0, target / np.maximum(lvl, 1e-12))
+    gain = np.interp(np.arange(c_end), starts + w // 2, g)
+    k = int(0.004 * SR)
+    gain = np.minimum(gain, np.convolve(gain, np.ones(k) / k, "same"))
+    y = y.copy()
+    y[:c_end] *= gain
+    return y
 
 
 def main() -> None:
@@ -284,8 +346,11 @@ def main() -> None:
     ap.add_argument("bank", type=Path)
     ap.add_argument("-o", "--out", type=Path, required=True)
     ap.add_argument("--gain", type=float, nargs="*", help="mix gain per UST in dB (default 0 for the first, -6 for others)")
+    ap.add_argument("--keep-level", action="store_true", help="keep each note's vowel at its sample's loudness at any pitch")
+    ap.add_argument("--consonant-cap", type=float, default=None, metavar="DB",
+                    help="limit each note's consonant to its vowel level + DB (e.g. -1)")
     a = ap.parse_args()
-    eng = Engine(a.bank)
+    eng = Engine(a.bank, keep_level=a.keep_level, consonant_cap_db=a.consonant_cap)
     mix = None
     for k, u in enumerate(a.ust):
         y, info = eng.render(parse_ust(u))

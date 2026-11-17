@@ -279,10 +279,35 @@ def synth(m: Mora, rng: np.random.Generator | None = None) -> tuple[np.ndarray, 
         if rf > 0:
             fric = fric * (10 ** (ex["db"] / 20) * rv / rf)
     y = y + fric
+    if kind != "vowel":
+        y = cap_consonant(y, c + tr // 2, c + tr)
     tail = int(0.04 * SR)
     y[-tail:] *= np.linspace(1, 0, tail)
     y = y / max(1e-9, np.abs(y).max()) * 0.8
     return y.astype("float32"), c / SR if kind != "vowel" else 0.02
+
+
+CONSONANT_CAP_DB = -1.0           # no 10 ms stretch of a consonant may be louder than its vowel
+
+
+def cap_consonant(y: np.ndarray, end: int, vowel_at: int, cap_db: float = CONSONANT_CAP_DB) -> np.ndarray:
+    """Limit the consonant part (before `end`) so its short-term level never exceeds the steady vowel's level."""
+    w = int(0.01 * SR)
+    vow = y[vowel_at:vowel_at + int(0.2 * SR)]
+    if len(vow) < 4 * w or end <= 0:
+        return y
+    nv = len(vow) // w
+    target = float(np.median(np.sqrt((vow[:nv * w].reshape(nv, w) ** 2).mean(1)))) * 10 ** (cap_db / 20)
+    hop = w // 2
+    starts = np.arange(0, max(1, end - w + 1), hop)
+    lvl = np.array([np.sqrt((y[s:s + w] ** 2).mean()) for s in starts])
+    g = np.minimum(1.0, target / np.maximum(lvl, 1e-12))
+    gain = np.interp(np.arange(end), starts + w // 2, g)
+    k = int(0.004 * SR)                                           # smooth the gain a little (no zipper noise)
+    gain = np.minimum(gain, np.convolve(gain, np.ones(k) / k, "same"))
+    y = y.copy()
+    y[:end] *= gain
+    return y
 
 
 def _syllabic_n(rng: np.random.Generator) -> tuple[np.ndarray, float]:

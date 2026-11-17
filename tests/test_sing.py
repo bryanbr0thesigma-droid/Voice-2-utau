@@ -38,3 +38,20 @@ def test_render_follows_the_score(tmp_path):
         assert len(seg) > 10 and abs(1200 * np.log2(np.median(seg) / want)) < 40, n.lyric
     pause = y[int(2.6 * audio.SR_BANK):int(2.9 * audio.SR_BANK)]                            # inside the っ (2.5-3.0 s)
     assert np.sqrt((pause ** 2).mean()) < 0.02
+
+
+def test_consonant_cap_keeps_consonants_at_or_below_their_vowel(tmp_path):
+    bank = synthbank.build(tmp_path, "B")
+    p = tmp_path / "s.ust"
+    p.write_bytes("\r\n".join(["[#SETTING]", "Tempo=120.00", "[#0000]", "Length=480", "Lyric=R", "NoteNum=60"] +
+                              sum(([f"[#{k:04d}]", "Length=480", f"Lyric={ly}", f"NoteNum={nn}"] for k, (ly, nn) in
+                                   enumerate([("し", 84), ("ちゃ", 88), ("ひ", 76), ("か", 60)], start=1)), [])).encode("cp932"))
+    notes = sing.parse_ust(p)
+    y, _ = sing.Engine(bank, keep_level=True, consonant_cap_db=-1).render(notes)
+    oto, w = sing.read_oto(bank), int(0.01 * audio.SR_BANK)
+    for n in notes[1:]:
+        pre, ovl = oto[n.lyric][1][3], oto[n.lyric][1][4]
+        a, b = int((n.start - pre / 1000 + ovl / 1000 + 0.005) * audio.SR_BANK), int((n.start - 0.005) * audio.SR_BANK)
+        v0, v1 = int((n.start + 0.03) * audio.SR_BANK), int((n.start + n.dur - 0.02) * audio.SR_BANK)
+        fr = lambda s, e: np.sqrt((y[s:s + (e - s) // w * w].reshape(-1, w) ** 2).mean(1))
+        assert 20 * np.log10(fr(a, b).max() / np.median(fr(v0, v1))) < 1.0, n.lyric
