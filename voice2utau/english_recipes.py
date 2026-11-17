@@ -1,5 +1,5 @@
 """The five characters as English recipes: the same voice sources, noise, clicks and finishing touches as their
-Japanese CV banks (see voice2utau.characters, voice2utau.andro), plugged into voice2utau.english."""
+Japanese CV banks (see voice2utau.characters, voice2utau.andro), plugged into voice2utau.arpasing."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 
 from . import characters, ninchan, synthbank
-from .english import Recipe
+from .arpasing import Recipe
 
 VB = Path(__file__).resolve().parent.parent / "voicebanks"
 

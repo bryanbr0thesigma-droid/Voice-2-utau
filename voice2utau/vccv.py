@@ -1,5 +1,5 @@
 """Convert a VCCV English UST (VDR / Cz-style aliases such as "-sO", "n sh", "sh3", "uk-") into Arpasing notes, so an
-Arpasing bank (voice2utau.english) can sing it with the UST's own timing.
+Arpasing bank (voice2utau.arpasing) can sing it with the UST's own timing.
 
 Each VCCV alias is read as a phone string (start '-', end '-', cluster '_', space-separated or run together), mapped to
 ARPAbet, and becomes one or more Arpasing units ('- V', 'C V', 'V C', 'C C', 'V V', 'V -', 'C -'). A note that needs

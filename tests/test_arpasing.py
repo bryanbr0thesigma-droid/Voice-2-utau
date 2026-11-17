@@ -2,7 +2,7 @@ from pathlib import Path
 
 import numpy as np
 
-from voice2utau import english as en
+from voice2utau import arpasing as en
 
 
 def test_unit_set_covers_arpasing():
