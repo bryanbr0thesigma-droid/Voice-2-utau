@@ -79,8 +79,9 @@ def onset_ms(x: np.ndarray, sr: int, frac: float = 0.1, cap_ms: float = 80.0) ->
 
 
 def build(groups: list[tuple[str, Path]], out_dir: Path, name: str, peak_db: float = -3.0,
-          themed: frozenset[str] = frozenset()) -> dict:
-    """groups: [(tag, folder)] in priority order (the first folder to contain a sound owns its file)."""
+          themed: frozenset[str] = frozenset(), max_seconds: float | None = None) -> dict:
+    """groups: [(tag, folder)] in priority order (the first folder to contain a sound owns its file).
+    max_seconds: cut longer sounds (ringtones) to this length with a short fade-out."""
     root = out_dir / name
     root.mkdir(parents=True, exist_ok=True)
     seen: dict[str, dict] = {}                         # content hash -> entry
@@ -123,6 +124,10 @@ def build(groups: list[tuple[str, Path]], out_dir: Path, name: str, peak_db: flo
             x = audio.resample(x, sr, SR)
         a, b = audio.trim_silence(x, SR, rel_db=-50.0, pad_ms=10.0)          # drop leading/trailing silence
         x = x[a:b] if b - a > 64 else x
+        if max_seconds and len(x) > int(max_seconds * SR):
+            x = x[:int(max_seconds * SR)].copy()
+            f = int(0.5 * SR)
+            x[-f:] *= np.linspace(1, 0, f)
         x = x / max(1e-9, float(np.abs(x).max())) * 10 ** (peak_db / 20)
         audio.write_wav(root / f"{stem}.wav", x.astype("float32"), SR)
         write_frq(root / f"{stem}_wav.frq", len(x))
@@ -168,8 +173,9 @@ def main() -> None:
     ap.add_argument("-o", "--out", type=Path, required=True)
     ap.add_argument("--name", default="Sound Effects")
     ap.add_argument("--themed", action="append", default=[], metavar="TAG", help="group whose sub-folders are themes")
+    ap.add_argument("--max-seconds", type=float, help="cut longer sounds to this length")
     a = ap.parse_args()
-    r = build([(t, Path(d)) for t, d in a.group], a.out, a.name, themed=frozenset(a.themed))
+    r = build([(t, Path(d)) for t, d in a.group], a.out, a.name, themed=frozenset(a.themed), max_seconds=a.max_seconds)
     print(f"{r['sounds']} sounds, {r['aliases']} aliases; skipped {len(r['skipped']['unreadable'])} unreadable, "
           f"{len(r['skipped']['silent'])} silent")
 

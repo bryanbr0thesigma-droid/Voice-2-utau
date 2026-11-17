@@ -416,11 +416,21 @@ def main() -> None:
                     help="world: vocoder resynthesis (smooth); psola: moves the sample's own cycles (keeps its exact timbre)")
     ap.add_argument("--consonant-cap", type=float, default=None, metavar="DB",
                     help="limit each note's consonant to its vowel level + DB (e.g. -1)")
+    ap.add_argument("--transpose", type=int, default=0, help="shift every note by this many semitones (e.g. -12)")
+    ap.add_argument("--suffix", default="", help="sing every lyric with this alias suffix when the bank has it "
+                    "(e.g. a voice colour like _sam)")
     a = ap.parse_args()
     eng = Engine(a.bank, keep_level=a.keep_level, consonant_cap_db=a.consonant_cap, engine=a.engine)
     mix = None
     for k, u in enumerate(a.ust):
-        y, info = eng.render(parse_ust(u))
+        notes = parse_ust(u)
+        for n in notes:
+            n.notenum += a.transpose
+            if a.suffix and n.lyric not in SILENT:
+                base = resolve(n.lyric, eng.oto)
+                if base and base + a.suffix in eng.oto:
+                    n.lyric = base + a.suffix
+        y, info = eng.render(notes)
         y = level_match(y)                     # each track scaled by its singing loudness, not by its single loudest peak
         g = (a.gain[k] if a.gain and k < len(a.gain) else (0.0 if k == 0 else -6.0))
         y = y * 10 ** (g / 20)

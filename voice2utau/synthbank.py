@@ -36,6 +36,7 @@ VOWEL_MS = 480                    # steady vowel after the transition
 VOWELS = {"a": (850, 1400, 2900), "i": (330, 2750, 3350), "u": (340, 1150, 2500), "e": (560, 2300, 3000),
           "o": (620, 1000, 2700)}
 F4, F5 = 3900, 4800
+FORMANT_SCALE = 1.0               # vocal-tract size: every resonance (vowels, loci, nasals, breath) x this; ~0.86 = male
 BW = np.array([80.0, 100.0, 150.0, 220.0, 300.0])
 
 
@@ -144,7 +145,7 @@ def _cascade(src: np.ndarray, freqs: list[np.ndarray], bwscale: np.ndarray | Non
             mid = min(n - 1, (s + e) // 2)
             bw = BW[k] * (bwscale[mid] if bwscale is not None and k in (1, 2) else 1.0)
             c = -np.exp(-2 * np.pi * bw / SR)
-            b = 2 * np.exp(-np.pi * bw / SR) * np.cos(2 * np.pi * float(f[mid]) / SR)
+            b = 2 * np.exp(-np.pi * bw / SR) * np.cos(2 * np.pi * float(f[mid]) * FORMANT_SCALE / SR)
             out[s:e], zi = lfilter([1 - b - c], [1.0, -b, -c], y[s:e], zi=zi)
         y = out
     return y
@@ -153,7 +154,7 @@ def _cascade(src: np.ndarray, freqs: list[np.ndarray], bwscale: np.ndarray | Non
 def _antiresonance(x: np.ndarray, fz: float, bw: float, gate: np.ndarray) -> np.ndarray:
     """Nasal zero (Klatt anti-resonator), mixed in only where gate > 0."""
     c = -np.exp(-2 * np.pi * bw / SR)
-    b = 2 * np.exp(-np.pi * bw / SR) * np.cos(2 * np.pi * fz / SR)
+    b = 2 * np.exp(-np.pi * bw / SR) * np.cos(2 * np.pi * fz * FORMANT_SCALE / SR)
     a = 1 - b - c
     z = lfilter([1 / a, -b / a, -c / a], [1.0], x)
     return x * (1 - gate) + z * gate
