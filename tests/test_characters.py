@@ -26,11 +26,15 @@ def test_hooks_are_restored_after_building(tmp_path):
     assert synthbank.SOURCE_FN is None and synthbank.NOISE_FN is None and synthbank.POST_FN is None
 
 
-def test_kaso_post_adds_tick_at_vowel_onset():
-    from voice2utau.characters import kaso_post
-    y = np.zeros(4000, dtype=np.float32); y[2000:] = 0.5
-    tick = np.ones(100, dtype=np.float32)
-    out, c = kaso_post(tick, tick_db=-20.0)(y, 1500, None, np.random.default_rng(0))
-    assert c == 1500
-    assert np.allclose(out[1500:1600], 0.1)                   # tick at -20 dB, nothing before it
-    assert np.allclose(out[:1500], 0)
+def test_kaso_post_lands_a_pop_on_the_vowel_onset():
+    from voice2utau.characters import SR, kaso_post
+    y = np.zeros(int(0.5 * SR)); c = int(0.1 * SR)
+    y[c:] = 0.5 * np.sin(2 * np.pi * 220 * np.arange(len(y) - c) / SR)    # low tone: inside the ducked band
+    pop = np.ones(2000)
+    out, c2 = kaso_post(pop, pop_db=-6.0, duck_db=-120.0, bloom_db=0.0)(y, c, None, np.random.default_rng(0))
+    assert c2 == c
+    a = c - int(0.004 * SR)
+    assert np.allclose(out[:a], 0)
+    under = out[c + 10:c + 400]                               # vowel ducked away: only the pop is left here
+    assert abs(np.sqrt((under ** 2).mean()) / (0.5 / np.sqrt(2)) - 10 ** (-6 / 20)) < 0.02
+    assert np.allclose(out[c + int(0.06 * SR):], y[c + int(0.06 * SR):])   # vowel back in full by 60 ms
