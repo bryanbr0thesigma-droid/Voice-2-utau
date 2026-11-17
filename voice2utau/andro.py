@@ -32,9 +32,12 @@ BRANDS = {
     "htc": "HTC", "sony": "Sony Xperia", "lg": "LG", "hw": "Huawei", "mi": "Xiaomi", "op": "OnePlus", "oppo": "OPPO",
     "vivo": "vivo", "nok": "Nokia", "asus": "Asus", "tcl": "TCL / Alcatel", "amz": "Amazon (Fire tablets, Fire TV)",
 }
-# a clip whose name says it is a voice is out even if the classifier misses it
-VOICE_WORDS = ("voice", "speech", "speak", "talk", "say", "hello_moto", "hellomoto", "droid", "bixby", "alexa", "assistant",
-               "tts", "beat_box", "beatbox", "vocal", "sing", "laugh", "narrat", "announce", "countdown", "hey_")
+# a clip whose name says it is a voice is out even if the classifier misses it (whole words, so "android" and
+# "crossing" don't count)
+VOICE_WORDS = {"voice", "speech", "speak", "talk", "say", "says", "droid", "bixby", "alexa", "assistant", "tts", "beatbox",
+               "vocal", "vocals", "vocalise", "vocalize", "singing", "sings", "laugh", "laughing", "narrator", "announcer",
+               "announcement", "countdown"}
+VOICE_PHRASES = ("hello_moto", "beat_box")
 
 
 @contextlib.contextmanager
@@ -48,8 +51,9 @@ def male(f0: float = MALE_F0, scale: float = MALE_SCALE):
 
 
 def named_like_voice(p: Path) -> bool:
-    s = p.stem.lower().replace("-", "_").replace(" ", "_")
-    return any(w in s for w in VOICE_WORDS)
+    import re
+    s = re.sub(r"[^a-z0-9]+", "_", p.stem.lower())
+    return bool(VOICE_WORDS & set(s.split("_"))) or any(ph in s for ph in VOICE_PHRASES)
 
 
 def read_excluded(tsv: Path | None) -> set[str]:
