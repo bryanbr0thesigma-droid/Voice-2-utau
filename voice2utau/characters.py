@@ -3,7 +3,7 @@
 nin-Chan (8-bit lineage): pulse-wave vowels (Game Boy / NES duty-cycle tone, perfectly steady like a chip), NES-style
     LFSR noise for fricatives, real Switch/Wii clicks as k/t/p releases, a tiny menu blip on every vowel onset, light
     8-bit quantisation.
-BAKO (sleek, ambient): a glassy pad made from an Xbox sound's own cycle with a three-voice chorus, a slow swell into
+BAKO (sleek, ambient): a pad voice made from an Xbox sound's own cycle, a slow swell into
     each vowel, the dashboard's air whoosh arriving before every syllable, and a low hum an octave under the note.
 
     python -m voice2utau.characters ninchan OUT --clicks a.wav b.wav --noise-dirs DIR ... [--sfx-bank DIR]
@@ -76,17 +76,18 @@ def ninchan_post(blip_db: float = -14.0, bits: int = 8):
 
 
 # ----------------------------------------------------------------------------------------------- BAKO: ambient
-def pad_source(table: np.ndarray, detune_cents: float = 6.0):
-    """Three slightly detuned copies of one cycle: a soft glassy chorus pad."""
-    rates = [2 ** (d / 1200) for d in (-detune_cents, 0.0, detune_cents)]
+def pad_source(table: np.ndarray, detune_cents: float = 0.0):
+    """A steady pad voice from one cycle. Optional detuned chorus copies (off by default: baked into the samples, the
+    beating measured as a 4.4 dB level wobble and sounded phasey; put chorus/space in the mix instead)."""
+    rates = [2 ** (d / 1200) for d in (-detune_cents, 0.0, detune_cents)] if detune_cents else [1.0]
+    gains = (0.8, 1.0, 0.8) if detune_cents else (1.0,)
 
     def source(n: int, rng: np.random.Generator) -> np.ndarray:
         y = np.zeros(n)
-        for r, g in zip(rates, (0.8, 1.0, 0.8)):
+        for r, g in zip(rates, gains):
             ph = (np.arange(n) * F0 * r / SR + rng.random()) % 1.0
             y += g * np.interp(ph * ninchan.N, np.arange(ninchan.N), table)
-        y = lfilter([0.5], [1, -0.5], y)                      # softer top than a voice: glassy, not buzzy
-        return y / max(1e-9, np.abs(y).max())
+        return y / max(1e-9, np.abs(y).max())                 # no extra low-pass: that made him sound muffled
     return source
 
 
@@ -180,7 +181,7 @@ def build_bako(out: Path, carrier: Path, noise_dirs: list[Path], sfx_bank: Path 
         root = synthbank.build(out, name)
     n = _merge_sfx(root, sfx_bank)
     (root / "readme.txt").write_text(
-        f"{name}\nAn ambient Japanese CV voicebank: glassy chorus-pad vowels cut from {carrier.name}, a slow swell into "
+        f"{name}\nAn ambient Japanese CV voicebank: pad vowels cut from {carrier.name}, a slow swell into "
         "each vowel, the Xbox dashboard's air whoosh arriving before each syllable (included in the preutterance), "
         f"and a low hum an octave under the note. Same synthesiser as MADO.\nAliases: hiragana and romaji; 息 / br; "
         f"{n} one-shot Xbox sounds.\nThe source sounds belong to Microsoft. Personal use only.\n"

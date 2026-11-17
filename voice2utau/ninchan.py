@@ -92,16 +92,24 @@ def richness(wt: np.ndarray, f0: float = synthbank.F0) -> int:
 
 
 def _glottal_envelope() -> np.ndarray:
-    """Harmonic magnitudes of MADO's own voice-source period (differentiated Rosenberg pulse + gentle tilt)."""
-    tp, te = int(0.48 * N), int(0.6 * N)
-    p = np.zeros(N)
-    p[:tp] = 0.5 * (1 - np.cos(np.pi * np.arange(tp) / tp))
-    p[tp:te] = np.cos(0.5 * np.pi * np.arange(te - tp) / max(1, te - tp))
-    d = np.diff(p, prepend=0.0)
-    G = np.abs(np.fft.rfft(d))
-    k = np.arange(len(G))
-    tilt = np.abs(0.6 / (1 - 0.4 * np.exp(-2j * np.pi * k * synthbank.F0 / SR)))
-    return G * tilt / max(1e-12, (G * tilt)[1:].max())
+    """Harmonic magnitudes of MADO's real voice source (as played at F0), indexed by harmonic number.
+
+    (An analytic, densely sampled pulse falls off far too steeply: it left BAKO's pad ~24 dB darker above 2 kHz
+    than MADO and sounding muffled.)"""
+    old = synthbank.SOURCE_FN
+    synthbank.SOURCE_FN = None
+    try:
+        n = SR
+        y = synthbank._source(n, np.random.default_rng(0), jitter=0.0, shimmer=0.0)
+    finally:
+        synthbank.SOURCE_FN = old
+    S = np.abs(np.fft.rfft(y * np.hanning(n)))
+    f = np.fft.rfftfreq(n, 1 / SR)
+    G = np.zeros(N // 2 + 1)
+    for k in range(1, min(N // 2, int(SR / 2 / synthbank.F0)) + 1):
+        band = (f > (k - 0.5) * synthbank.F0) & (f < (k + 0.5) * synthbank.F0)
+        G[k] = S[band].max() if band.any() else 0.0
+    return G / max(1e-12, G[1:].max())
 
 
 def flatten(wt: np.ndarray, keep: float = 0.3, smooth: int = 5) -> np.ndarray:
@@ -111,7 +119,12 @@ def flatten(wt: np.ndarray, keep: float = 0.3, smooth: int = 5) -> np.ndarray:
     keep = 0 -> a plain voice source with Nintendo phases; keep = 1 -> the full Nintendo harmonic ripple on a voice tilt."""
     X = np.fft.rfft(wt)
     mag = np.abs(X) + 1e-9
-    env = np.exp(np.convolve(np.log(mag), np.ones(smooth) / smooth, "same"))
+    kmax = int(SR / 2 / synthbank.F0)
+    lm = np.log(mag[1:kmax + 1])                               # harmonics only: the DC bin (~0) used to drag the
+    pad = smooth // 2                                          # smoothed envelope down at harmonics 1-2, boosting
+    lm = np.concatenate([np.full(pad, lm[0]), lm, np.full(pad, lm[-1])])   # the fundamental ~30 dB (muffled BAKO)
+    env = np.ones_like(mag)
+    env[1:kmax + 1] = np.exp(np.convolve(lm, np.ones(smooth) / smooth, "valid"))
     G = _glottal_envelope()
     Y = G * (mag / env) ** keep * np.exp(1j * np.angle(X))
     Y[0] = 0
