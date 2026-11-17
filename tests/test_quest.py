@@ -47,11 +47,11 @@ def test_halo_is_an_octave_up():
 def test_contain_fades_the_tail_after_she_stops():
     dry = np.zeros(SR * 3); dry[:SR] = 0.3
     wet = np.ones(SR * 3)
-    g = quest.contain(wet, dry, SR, hold=0.35, release=0.4)
+    g = quest.contain(wet, dry, SR, hold=0.35, release=1.5)
     assert g[int(0.5 * SR)] > 0.99                            # while singing
     assert g[int(1.3 * SR)] > 0.95                            # held just after
-    assert g[int(1.9 * SR)] < 0.01                            # gone 0.75 s after she stops
-    assert np.all(np.diff(g[int(1.3 * SR):int(1.9 * SR)]) <= 1e-9)
+    assert g[int(2.95 * SR)] < 0.01                           # gone ~2 s after she stops
+    assert np.all(np.diff(g[int(1.3 * SR):int(2.95 * SR)]) <= 1e-9)
 
 
 def test_dream_keeps_reverb_out_of_the_low_mids():
@@ -66,9 +66,9 @@ def test_dream_keeps_reverb_out_of_the_low_mids():
     assert lowmid_share(wet_hp=550.0) < 0.05 * lowmid_share(wet_hp=0)     # at least 13 dB less body
 
 
-def test_startup_ir_has_air_not_a_midrange_fog():
-    ir = quest.startup_ir(_startup(), SR)
-    X = np.abs(np.fft.rfft(ir)) ** 2; f = np.fft.rfftfreq(len(ir), 1 / SR)
-    mid = X[(f > 500) & (f < 1000)].sum() / 500
-    air = X[(f > 3000) & (f < 6000)].sum() / 3000
-    assert air > 0.7 * mid                                    # per Hz, about as much air as midrange
+def test_reverb_adds_no_hiss():
+    rng = np.random.default_rng(3)
+    x = (rng.standard_normal(SR) * 0.1).astype("float32")
+    wet = quest.dream(x, SR, quest.startup_ir(_startup(), SR), contained=False)[:len(x)] - x
+    W = np.abs(np.fft.rfft(wet)) ** 2; f = np.fft.rfftfreq(len(wet), 1 / SR)
+    assert W[f > 5000].sum() < 0.01 * W[(f > 700) & (f < 3000)].sum()

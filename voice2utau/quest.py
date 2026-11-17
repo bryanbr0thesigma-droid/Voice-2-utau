@@ -4,8 +4,9 @@ startup_ir  a reverb shaped by the Quest startup sound: its swell and fade, a tr
             full-range spectrum (the startup itself is all midrange, which fogs the music), never in the chord's key.
 halo        her voice an octave up (WORLD: same formants, doubled pitch), like the Quest 'success' chime leaping up
             an octave. Fed only into the reverb, so it hangs above her as a shimmer, not a second singer.
-dream       vocal + reverb(vocal + halo), the reverb kept above the music's body (high-passed) and contained to her
-            phrases (it rings while she sings, then fades soon after), so her ambience does not bleed into the music.
+dream       vocal + reverb(vocal + halo), the reverb kept between the music's body and the hiss (550-3500 Hz) and
+            contained to her phrases (it rings while she sings, then eases out), so her ambience does not bleed into
+            the music and her breath never becomes steam.
 
     python -m voice2utau.quest VOCAL.wav OUT.wav --startup startup.wav [--wet -6] [--halo -3]
 """
@@ -31,11 +32,11 @@ def _smooth_bins(mag: np.ndarray, freqs: np.ndarray, octaves: float) -> np.ndarr
 
 
 def startup_ir(x: np.ndarray, sr: int, length: float = 2.0, color_db: float = 6.0, smooth_oct: float = 0.5,
-               air_db_oct: float = 3.0, predelay: float = 0.025, seed: int = 0) -> np.ndarray:
+               air_db_oct: float = 0.0, predelay: float = 0.025, seed: int = 0) -> np.ndarray:
     """Reverb with the startup sound's swell-and-fade shape (its level, frame by frame) on a full-range, airy
     spectrum. `color_db` caps how much of the startup's own (smoothed) spectrum is kept: the startup is near-pure
-    tones at 300-1000 Hz, so taking all of it makes a midrange fog that sits right in the music; `air_db_oct` lifts everything above 1 kHz
-    so her ambience sits above the music instead of in it."""
+    tones at 300-1000 Hz, so taking all of it makes a midrange fog that sits right in the music. `air_db_oct` tilts
+    everything above 1 kHz; keep it at 0 or below: lifting the top turns her breath into steam-engine hiss."""
     x = np.asarray(x, dtype=np.float64)[:int(length * sr)]
     nfft, hop = 2048, 512
     win = np.hanning(nfft)
@@ -58,19 +59,21 @@ def startup_ir(x: np.ndarray, sr: int, length: float = 2.0, color_db: float = 6.
     return (ir / max(1e-12, np.sqrt((ir ** 2).sum()))).astype(np.float32)
 
 
-def halo(x: np.ndarray, sr: int, ratio: float = 2.0) -> np.ndarray:
-    """The vocal at `ratio` times the pitch with the same spectral envelope (WORLD), top-weighted."""
+def halo(x: np.ndarray, sr: int, ratio: float = 2.0, breath: float = 0.15) -> np.ndarray:
+    """The vocal at `ratio` times the pitch with the same spectral envelope (WORLD), kept tonal (aperiodicity scaled
+    by `breath`, so it rings like a chime instead of hissing) and limited to 1.2-4 kHz."""
     import pyworld as pw
     x = np.asarray(x, dtype=np.float64)
     f0, t = pw.harvest(x, sr, frame_period=5.0)
     sp = pw.cheaptrick(x, f0, t, sr)
     ap = pw.d4c(x, f0, t, sr)
+    ap = np.clip(ap * breath, 0.0, 1.0)
     y = pw.synthesize(f0 * ratio, sp, ap, sr, frame_period=5.0)[:len(x)]
     y = np.pad(y, (0, len(x) - len(y)))
-    return sosfilt(butter(2, 1200.0, "high", fs=sr, output="sos"), y).astype(np.float32)
+    return sosfilt(butter(2, [1200.0, 4000.0], "band", fs=sr, output="sos"), y).astype(np.float32)
 
 
-def contain(wet: np.ndarray, dry: np.ndarray, sr: int, hold: float = 0.35, release: float = 0.4,
+def contain(wet: np.ndarray, dry: np.ndarray, sr: int, hold: float = 0.5, release: float = 1.2,
             floor_db: float = -40.0) -> np.ndarray:
     """Let the reverb ring while she sings and for `hold` seconds after, then fade it over `release` seconds, so her
     ambience stays on her voice instead of hanging over the music in the gaps."""
@@ -86,13 +89,14 @@ def contain(wet: np.ndarray, dry: np.ndarray, sr: int, hold: float = 0.35, relea
     since = 10 ** 9
     for i, o in enumerate(on):
         since = 0 if o else since + 1
-        g[i] = 1.0 if since <= h else max(0.0, 1.0 - (since - h) / r)
+        g[i] = 1.0 if since <= h else 0.5 + 0.5 * np.cos(np.pi * min(1.0, (since - h) / r))
     g = np.convolve(g, np.ones(3) / 3, "same")                 # no zipper steps
     return wet * np.repeat(g, w)[:n]
 
 
 def dream(x: np.ndarray, sr: int, ir: np.ndarray, wet_db: float = -7.0, halo_db: float = -3.0,
-          halo_sig: np.ndarray | None = None, wet_hp: float = 550.0, contained: bool = True) -> np.ndarray:
+          halo_sig: np.ndarray | None = None, wet_hp: float = 550.0, wet_lp: float = 3500.0,
+          contained: bool = True) -> np.ndarray:
     """Dry vocal plus the startup reverb of (vocal + octave halo). The reverb is kept above `wet_hp` (out of the
     music's body) and contained to her phrases. Output is longer by the reverb tail."""
     x = np.asarray(x, dtype=np.float64)
@@ -100,8 +104,10 @@ def dream(x: np.ndarray, sr: int, ir: np.ndarray, wet_db: float = -7.0, halo_db:
     if halo_sig is not None:
         send = send + np.asarray(halo_sig, dtype=np.float64)[:len(x)] * (_rms(x) / _rms(halo_sig)) * 10 ** (halo_db / 20)
     wet = fftconvolve(send, ir)
-    if wet_hp:
+    if wet_hp:                                                 # out of the music's body
         wet = sosfilt(butter(4, wet_hp, "high", fs=sr, output="sos"), wet)
+    if wet_lp:                                                 # and below the hiss: breath reverb = steam
+        wet = sosfilt(butter(4, wet_lp, "low", fs=sr, output="sos"), wet)
     if contained:
         wet = contain(wet, x, sr)
     wet *= _rms(x) / _rms(wet[:len(x)]) * 10 ** (wet_db / 20)
