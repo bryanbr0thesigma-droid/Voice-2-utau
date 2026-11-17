@@ -193,7 +193,8 @@ def envelope(n: Note, L: int) -> np.ndarray:
 
 
 class Engine:
-    def __init__(self, bank: Path, keep_level: bool = False, consonant_cap_db: float | None = None):
+    def __init__(self, bank: Path, keep_level: bool = False, consonant_cap_db: float | None = None,
+                 engine: str = "world"):
         """keep_level: every note keeps the vowel loudness of its source sample (WORLD's output level swings with the
         pitch shift, by up to ~13 dB at +2.5 octaves). consonant_cap_db: no 10 ms of a note's consonant may be louder
         than its own rendered vowel plus this many dB (None = off)."""
@@ -202,6 +203,9 @@ class Engine:
         self.oto = read_oto(self.bank)
         self.cache: dict[tuple, tuple] = {}
         self.keep_level, self.cap_db = keep_level, consonant_cap_db
+        if engine not in ("world", "psola"):
+            raise ValueError("engine must be world or psola")
+        self.engine = engine
         self.ref_level: dict[tuple, float] = {}
 
     def source_vowel_rms(self, wav: str, off: float, cons: float, cut: float) -> float:
@@ -227,7 +231,7 @@ class Engine:
             f0 = pw.stonemask(seg, f0, t, SR)
             sp = pw.cheaptrick(seg, f0, t, SR)
             ap = pw.d4c(seg, f0, t, SR)
-            self.cache[key] = (f0, sp, ap)
+            self.cache[key] = (f0, sp, ap, seg)
         return self.cache[key]
 
     def render(self, notes: list[Note], tail_s: float = 1.0) -> tuple[np.ndarray, dict]:
@@ -265,7 +269,7 @@ class Engine:
                     L_ms += novl - npre
             else:
                 L_ms += 30.0
-            f0, sp, ap = self.analyse(wav, off, cut)
+            f0, sp, ap, seg = self.analyse(wav, off, cut)
             nin = len(f0)
             vel = 2 ** ((100 - n.velocity) / 100)
             cons_in = min(nin - 2, max(1, int(cons / FP)))
@@ -280,7 +284,10 @@ class Engine:
             fr = np.clip(((t0 * 1000 + np.arange(nout) * FP) / FP).astype(int), 0, len(cents) - 1)
             hz = 440.0 * 2 ** ((cents[fr] / 100 - 69) / 12)
             nf0 = np.where(f0[ii] > 0, hz, 0.0)
-            y = pw.synthesize(np.ascontiguousarray(nf0), np.ascontiguousarray(sp[ii]), np.ascontiguousarray(ap[ii]), SR, FP)
+            if self.engine == "psola":
+                y = psola(seg, f0, idx, nf0, nout)
+            else:
+                y = pw.synthesize(np.ascontiguousarray(nf0), np.ascontiguousarray(sp[ii]), np.ascontiguousarray(ap[ii]), SR, FP)
             if self.keep_level or self.cap_db is not None:
                 from .synthbank import cap_consonant
                 c_end = int(cons_out * FP / 1000 * SR)                       # end of the (velocity-scaled) consonant
@@ -339,6 +346,49 @@ def _cap_to(y: np.ndarray, c_end: int, v0: int, v1: int, cap_db: float) -> np.nd
     return y
 
 
+def psola(x: np.ndarray, f0: np.ndarray, idx: np.ndarray, target_hz: np.ndarray, nout: int) -> np.ndarray:
+    """TD-PSOLA: re-pitch/stretch by overlap-adding two-period Hann grains cut at the sample's own pitch marks.
+
+    x: source segment; f0: its WORLD f0 per FP frame (0 = unvoiced); idx: input frame position for each output frame;
+    target_hz: output pitch per output frame (0 = unvoiced). Keeps the waveform detail that a vocoder smooths away."""
+    fps = FP / 1000 * SR
+    nf = len(f0)
+    marks, pos = [], 0.0
+    while pos < len(x):                                         # pitch marks: one per period, 5 ms apart when unvoiced
+        f = f0[min(int(pos / fps), nf - 1)]
+        marks.append(pos)
+        pos += SR / f if f > 0 else 0.005 * SR
+    marks = np.array(marks)
+    L = int(nout * fps)
+    out = np.zeros(L + 4096)
+    wsum = np.zeros(L + 4096)
+    frames = np.arange(nout)
+    t = 0.0
+    while t < L:
+        j = t / fps
+        ti = float(np.interp(j, frames, idx)) * fps
+        k = int(np.clip(np.searchsorted(marks, ti), 0, len(marks) - 1))
+        if k > 0 and abs(marks[k - 1] - ti) < abs(marks[k] - ti):
+            k -= 1
+        m = marks[k]
+        fin = f0[min(int(m / fps), nf - 1)]
+        ft = float(np.interp(j, frames, target_hz))
+        Tin = SR / fin if fin > 0 else 0.005 * SR
+        Tout = SR / ft if (fin > 0 and ft > 0) else Tin
+        h = int(Tin)
+        a, b = int(m) - h, int(m) + h
+        if a >= 0 and b <= len(x) and h > 1:
+            win = np.hanning(2 * h)
+            c = int(t) - h
+            if c >= 0:
+                out[c:c + 2 * h] += x[a:b] * win
+                wsum[c:c + 2 * h] += win
+        t += max(Tout, 8.0)
+    out, wsum = out[:L], wsum[:L]
+    y = np.where(wsum > 1e-3, out / np.maximum(wsum, 0.5), out)
+    return y
+
+
 def level_match(y: np.ndarray, target_db: float = -20.0) -> np.ndarray:
     """Scale a rendered track so the RMS of its sounding 50 ms windows is target_db (peak scaling let one hot note
     make a whole track ~9 dB quieter than another)."""
@@ -362,10 +412,12 @@ def main() -> None:
     ap.add_argument("-o", "--out", type=Path, required=True)
     ap.add_argument("--gain", type=float, nargs="*", help="mix gain per UST in dB (default 0 for the first, -6 for others)")
     ap.add_argument("--keep-level", action="store_true", help="keep each note's vowel at its sample's loudness at any pitch")
+    ap.add_argument("--engine", choices=["world", "psola"], default="world",
+                    help="world: vocoder resynthesis (smooth); psola: moves the sample's own cycles (keeps its exact timbre)")
     ap.add_argument("--consonant-cap", type=float, default=None, metavar="DB",
                     help="limit each note's consonant to its vowel level + DB (e.g. -1)")
     a = ap.parse_args()
-    eng = Engine(a.bank, keep_level=a.keep_level, consonant_cap_db=a.consonant_cap)
+    eng = Engine(a.bank, keep_level=a.keep_level, consonant_cap_db=a.consonant_cap, engine=a.engine)
     mix = None
     for k, u in enumerate(a.ust):
         y, info = eng.render(parse_ust(u))

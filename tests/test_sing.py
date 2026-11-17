@@ -66,3 +66,25 @@ def test_level_match_uses_sounding_loudness_not_peaks():
     a, b = sing.level_match(quiet_with_spike.astype("float32")), sing.level_match(loud.astype("float32"))
     ra, rb = np.sqrt((a[2000:] ** 2).mean()), np.sqrt((b[2000:] ** 2).mean())
     assert abs(20 * np.log10(ra / rb)) < 1.0
+
+
+def test_psola_engine_hits_the_pitch_and_keeps_waveform_detail(tmp_path):
+    from voice2utau import characters
+    bank = characters.build_ninchan(tmp_path, clicks=[])
+    r = sing.Note("R", 480, 60, 120.0); r.start, r.dur = 0.0, 0.5
+    a = sing.Note("あ", 1440, 60, 120.0); a.start, a.dur = 0.5, 1.5
+    e = sing.Note("R", 480, 60, 120.0); e.start, e.dur = 2.0, 0.5
+    sr = audio.SR_BANK
+
+    def gap(engine):
+        y, _ = sing.Engine(bank, engine=engine).render([r, a, e])
+        seg = y[int(0.9 * sr):int(1.7 * sr)].astype("float64")
+        f0, t = pw.dio(seg, sr, frame_period=5.0)
+        fm = np.median(f0[f0 > 0])
+        S = np.abs(np.fft.rfft(seg * np.hanning(len(seg)), 8 * len(seg))); fr = np.fft.rfftfreq(8 * len(seg), 1 / sr)
+        H = lambda k: 20 * np.log10(S[np.argmin(np.abs(fr - k * fm))] + 1e-9)
+        return fm, H(4) - (H(3) + H(5)) / 2
+    fw, gw = gap("world")
+    fp, gp = gap("psola")
+    assert abs(1200 * np.log2(fp / 261.63)) < 10
+    assert gp < gw - 10                                       # the 25 % pulse wave's missing 4th harmonic survives PSOLA

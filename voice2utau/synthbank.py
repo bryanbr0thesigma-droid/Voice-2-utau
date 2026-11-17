@@ -103,6 +103,9 @@ SOURCE_FN = None
 NOISE_FN = None
 # BURST_FN(n_samples, place, rng) -> a stop/affricate release burst (e.g. a slice of a real button click)
 BURST_FN = None
+# POST_FN(y, vowel_onset_sample, mora, rng) -> (y, vowel_onset_sample): character touches added to each finished clip
+# (it may prepend material, e.g. a whoosh, by returning a later vowel onset)
+POST_FN = None
 
 
 def _noise(n: int, rng: np.random.Generator) -> np.ndarray:
@@ -300,8 +303,11 @@ def synth(m: Mora, rng: np.random.Generator | None = None) -> tuple[np.ndarray, 
         y = cap_consonant(y, c + tr // 2, c + tr)
     tail = int(0.04 * SR)
     y[-tail:] *= np.linspace(1, 0, tail)
+    split = c if kind != "vowel" else int(0.02 * SR)
+    if POST_FN is not None:
+        y, split = POST_FN(y, split, m, rng)
     y = y / max(1e-9, np.abs(y).max()) * 0.8
-    return y.astype("float32"), c / SR if kind != "vowel" else 0.02
+    return y.astype("float32"), split / SR
 
 
 CONSONANT_CAP_DB = -1.0           # no 10 ms stretch of a consonant may be louder than its vowel
