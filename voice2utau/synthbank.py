@@ -97,7 +97,19 @@ def _track(loc: float, tgt: float, n: int, c: int, tr: int) -> np.ndarray:
     return np.interp(np.arange(n), [0, c, c + max(tr, 1), n], [loc, loc, tgt, tgt])
 
 
+# Optional replacement sources (see voice2utau.ninchan): SOURCE_FN(n, rng) -> voiced excitation at F0,
+# NOISE_FN(n, rng) -> broadband noise. None = the built-in glottal pulses / white noise.
+SOURCE_FN = None
+NOISE_FN = None
+
+
+def _noise(n: int, rng: np.random.Generator) -> np.ndarray:
+    return NOISE_FN(n, rng) if NOISE_FN is not None else rng.standard_normal(n)
+
+
 def _source(n: int, rng: np.random.Generator, jitter: float = 0.004, shimmer: float = 0.03) -> np.ndarray:
+    if SOURCE_FN is not None:
+        return SOURCE_FN(n, rng)
     """Differentiated Rosenberg pulses, one period at a time: mean pitch F0, slight jitter/shimmer, gentle tilt."""
     out = np.zeros(n)
     i = 0
@@ -143,7 +155,7 @@ def _antiresonance(x: np.ndarray, fz: float, bw: float, gate: np.ndarray) -> np.
 
 
 def _band_noise(n: int, cf: float, bw: float, hp: float, rng: np.random.Generator) -> np.ndarray:
-    x = rng.standard_normal(n)
+    x = _noise(n, rng)
     lo, hi = max(200.0, cf - bw), min(SR / 2 - 500, cf + bw)
     x = sosfilt(butter(2, [lo, hi], "band", fs=SR, output="sos"), x)
     x = sosfilt(butter(2, hp, "high", fs=SR, output="sos"), x)
@@ -259,10 +271,10 @@ def synth(m: Mora, rng: np.random.Generator | None = None) -> tuple[np.ndarray, 
     elif kind == "glide":
         voiced = _ramp(n, 0, int(0.03 * SR)) * np.where(idx < c, 0.75, 1.0)
 
-    noise = rng.standard_normal(n)
+    noise = _noise(n, rng)
     if asp_hp:                                                 # aspiration after a stop: open glottis, energy in F2/F3
         noise = sosfilt(butter(2, asp_hp, "high", fs=SR, output="sos"), noise) * 2.0
-    src = glot * voiced + noise * asp * 0.3 + rng.standard_normal(n) * voiced * 0.004
+    src = glot * voiced + noise * asp * 0.3 + _noise(n, rng) * voiced * 0.004
     if lp_gate is not None:
         low = lfilter([1 - 0.93], [1, -0.93], src) * 1.4
         src = src * (1 - lp_gate) + low * lp_gate
@@ -326,7 +338,7 @@ def breath(rng: np.random.Generator) -> np.ndarray:
     n = int(0.5 * SR)
     env = np.sin(np.pi * np.arange(n) / n) ** 1.5
     f = [np.full(n, 500.0), np.full(n, 1500.0), np.full(n, 2500.0), np.full(n, F4), np.full(n, F5)]
-    y = _cascade(rng.standard_normal(n) * env, f, np.full(n, 3.0))
+    y = _cascade(_noise(n, rng) * env, f, np.full(n, 3.0))
     return (y / max(1e-9, np.abs(y).max()) * 0.3).astype("float32")
 
 

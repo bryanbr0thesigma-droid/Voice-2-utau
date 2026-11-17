@@ -20,7 +20,7 @@ from . import audio
 SR = audio.SR_BANK
 FP = 5.0                                  # WORLD frame period, ms
 TICKS = 480                               # per quarter note
-LYRIC_FALLBACK = {"を": "お", "づ": "ず", "ぢ": "じ", "ゔ": "ぶ", "ゐ": "い", "ゑ": "え"}
+LYRIC_FALLBACK = {"wo": "o", "を": "お", "づ": "ず", "ぢ": "じ", "ゔ": "ぶ", "ゐ": "い", "ゑ": "え"}
 SILENT = {"R", "r", "", "っ", "ッ", "・"}
 
 
