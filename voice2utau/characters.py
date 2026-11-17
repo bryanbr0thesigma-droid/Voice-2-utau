@@ -5,9 +5,13 @@ nin-Chan (8-bit lineage): pulse-wave vowels (Game Boy / NES duty-cycle tone, per
     8-bit quantisation.
 BAKO (sleek, ambient): a pad voice made from an Xbox sound's own cycle, a slow swell into
     each vowel, the dashboard's air whoosh arriving before every syllable, and a low hum an octave under the note.
+Kaso (Meta Quest): vowels from the Quest UI 'success' tone, Guardian / swipe noise, Quest clicks as releases, a faint
+    hover tick on each vowel onset, the Guardian boundary shimmer as her breath.
 
     python -m voice2utau.characters ninchan OUT --clicks a.wav b.wav --noise-dirs DIR ... [--sfx-bank DIR]
     python -m voice2utau.characters bako OUT --carrier startup.wav --noise-dirs DIR ...  [--sfx-bank DIR]
+    python -m voice2utau.characters kaso OUT --carrier success.wav --noise-files ... --clicks ... --tick hover.wav
+        --breath boundary_draw_loop.wav [--sfx-bank DIR]
 """
 from __future__ import annotations
 
@@ -189,23 +193,84 @@ def build_bako(out: Path, carrier: Path, noise_dirs: list[Path], sfx_bank: Path 
     return root
 
 
+# ----------------------------------------------------------------------------------------------- Kaso: Meta Quest
+def kaso_post(tick: np.ndarray | None, tick_db: float = -20.0):
+    """A faint Quest hover tick on every vowel onset."""
+    def post(y: np.ndarray, c: int, m, rng: np.random.Generator) -> tuple[np.ndarray, int]:
+        y = y / max(1e-9, np.abs(y).max()) * 0.8
+        if tick is not None and len(tick):
+            a = min(max(0, c), len(y) - len(tick))
+            y = y.copy()
+            y[a:a + len(tick)] += tick * 10 ** (tick_db / 20)
+        return y, c
+    return post
+
+
+def _load(p: Path, seconds: float | None = None) -> np.ndarray:
+    x, sr = audio.read_wav(p)
+    x = audio.resample(x, sr, SR) if sr != SR else x
+    a, b = audio.trim_silence(x, SR, rel_db=-40)
+    x = x[a:b]
+    if seconds:
+        x = x[:int(seconds * SR)]
+    return x / max(1e-9, np.abs(x).max())
+
+
+def build_kaso(out: Path, carrier: Path, noise_files: list[Path], clicks: list[Path], tick_file: Path | None,
+               breath_file: Path | None, sfx_bank: Path | None = None, name: str = "Kaso", keep: float = 0.5) -> Path:
+    c = ninchan.pick_carriers([], top=1, keep=keep, files=[carrier])
+    if not c:
+        raise ValueError(f"no steady tone found in {carrier}")
+    tick = None
+    if tick_file:
+        tick = _load(tick_file, 0.03)
+        tick *= np.linspace(1, 0, len(tick))
+    noise = ninchan.make_noise(noise_files, mix=0.7) if noise_files else None
+    with _hooks(ninchan.make_source([c[0][3]]), noise, ninchan.make_burst(clicks) if clicks else None, kaso_post(tick)):
+        root = synthbank.build(out, name)
+    if breath_file:                                           # her breath is the Guardian boundary shimmer
+        br = _load(breath_file, 0.6)
+        f = int(0.08 * SR)
+        br[:f] *= np.linspace(0, 1, f)
+        br[-f:] *= np.linspace(1, 0, f)
+        audio.write_wav(root / "br.wav", (br * 0.3).astype("float32"), SR)
+        from .sfxbank import write_frq
+        write_frq(root / "br_wav.frq", len(br))
+    n = _merge_sfx(root, sfx_bank)
+    (root / "readme.txt").write_text(
+        f"{name}\nA Japanese CV voicebank made of Meta Quest system sounds: vowels from the Quest UI '{carrier.stem}' tone, "
+        "consonant noise from Guardian / system sounds, real Quest UI clicks as k/t/p releases, a faint hover tick on each "
+        f"vowel onset, the Guardian boundary shimmer as her breath (息 / br). Same synthesiser as MADO.\n{n} one-shot Quest "
+        "sounds as quest_<name>.\nFor the full effect, render with voice2utau.sing --engine psola and mix with "
+        "voice2utau.spatial (binaural, for headphones).\nThe source sounds belong to Meta. Personal use only.\n",
+        encoding="utf-8")
+    return root
+
+
 def main() -> None:
     import argparse
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("character", choices=["ninchan", "bako"])
+    ap.add_argument("character", choices=["ninchan", "bako", "kaso"])
     ap.add_argument("out", type=Path)
     ap.add_argument("--clicks", type=Path, nargs="*", default=[])
     ap.add_argument("--carrier", type=Path)
     ap.add_argument("--noise-dirs", type=Path, nargs="*", default=[])
     ap.add_argument("--sfx-bank", type=Path)
     ap.add_argument("--name")
+    ap.add_argument("--noise-files", type=Path, nargs="*", default=[])
+    ap.add_argument("--tick", type=Path)
+    ap.add_argument("--breath", type=Path)
     a = ap.parse_args()
     if a.character == "ninchan":
         root = build_ninchan(a.out, a.clicks, a.sfx_bank, a.name or "nin-Chan")
-    else:
+    elif a.character == "bako":
         if not a.carrier:
             ap.error("bako needs --carrier")
         root = build_bako(a.out, a.carrier, a.noise_dirs, a.sfx_bank, a.name or "BAKO")
+    else:
+        if not a.carrier:
+            ap.error("kaso needs --carrier")
+        root = build_kaso(a.out, a.carrier, a.noise_files, a.clicks, a.tick, a.breath, a.sfx_bank, a.name or "Kaso")
     print(f"wrote {root}")
 
 

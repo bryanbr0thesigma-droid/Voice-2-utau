@@ -24,3 +24,13 @@ def test_bako_whoosh_arrives_before_the_syllable(tmp_path):
 def test_hooks_are_restored_after_building(tmp_path):
     characters.build_ninchan(tmp_path, clicks=[])
     assert synthbank.SOURCE_FN is None and synthbank.NOISE_FN is None and synthbank.POST_FN is None
+
+
+def test_kaso_post_adds_tick_at_vowel_onset():
+    from voice2utau.characters import kaso_post
+    y = np.zeros(4000, dtype=np.float32); y[2000:] = 0.5
+    tick = np.ones(100, dtype=np.float32)
+    out, c = kaso_post(tick, tick_db=-20.0)(y, 1500, None, np.random.default_rng(0))
+    assert c == 1500
+    assert np.allclose(out[1500:1600], 0.1)                   # tick at -20 dB, nothing before it
+    assert np.allclose(out[:1500], 0)
