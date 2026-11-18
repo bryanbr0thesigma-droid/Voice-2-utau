@@ -18,19 +18,20 @@ from pathlib import Path
 
 import numpy as np
 
-from scipy.signal import butter, sosfilt
+from scipy.signal import butter, lfilter, sosfilt
 
 from . import arpasing, audio, ninchan, synthbank
 from .characters import _hooks, _merge_sfx
 
 SR = synthbank.SR
 F0 = 138.59                        # C#3: a man around thirty, between ANDRO (C3) and UNIX (D3)
-SCALE = 0.87                       # an adult male vocal tract
-JP_SCALE = 0.92                    # Japanese: five vowels; 0.88 blurred them (56/101 -> 61)
-KEEP, VOWEL_MIX, DIRECT_DB = 0.75, 0.7, -16.0   # mostly real voice: a man around thirty, ~58% of English word sounds heard
+SCALE = 0.84                       # an adult male vocal tract, chesty (0.87 + a bright source read like UNIX)
+JP_SCALE = SCALE                   # with the breathy, warm voice Japanese reads as well at 0.84 (70/101 vowels)
+KEEP, VOWEL_MIX, DIRECT_DB = 0.75, 0.7, -19.0   # mostly real voice: a man around thirty, ~67% of English word sounds heard
 DIRECT_LP = 4000.0                 # the raw layer warms the mids only: unfiltered, its top end made him sound like UNIX
 JP_DIRECT_DB = -24.0               # the warm layer sits on the formants: -16 dB cost Japanese vowels 71 -> 56/101
-DRUM_DB = -20.0
+BREATH, TILT = 0.2, 0.35           # breathy and warm: the opposite of UNIX's dry, gritty precision
+DRUM_DB = -17.0
 CLEAN = Path(__file__).resolve().parent.parent / "voicebanks" / "linx" / "stage"
 TONES = ["mint/linuxmint-login", "yaru/desktop-login", "kde/Oxygen-Sys-Log-In-Long", "gnome2/shutdown1",
          "deepin/desktop-login", "chromeos/startup"]
@@ -91,11 +92,39 @@ def _warm(source, fc: float = DIRECT_LP):
     return lambda n, rng: sosfilt(sos, source(n, rng))
 
 
+def young_voice(breath: float = BREATH, tilt: float = TILT, jitter: float = 0.005, shimmer: float = 0.035):
+    """A relaxed young man's voice source: glottal pulses with a gentle tilt (warm, not bright) and breath riding on
+    each cycle - soft and friendly, the opposite of UNIX's dry, gritty precision."""
+    hp = butter(2, 1200.0, "high", fs=SR, output="sos")
+    sm = butter(1, 400.0, "low", fs=SR, output="sos")
+
+    def source(n: int, rng: np.random.Generator) -> np.ndarray:
+        g = synthbank.glottal(n, rng, jitter=jitter, shimmer=shimmer)
+        g = lfilter([1 - tilt], [1, -tilt], g)
+        noise = sosfilt(hp, rng.standard_normal(n)) * np.maximum(sosfilt(sm, np.abs(g)), 0)
+        g /= max(1e-9, float(np.sqrt((g ** 2).mean())))
+        noise /= max(1e-9, float(np.sqrt((noise ** 2).mean())))
+        y = np.sqrt(1 - breath ** 2) * g + breath * noise
+        return y / max(1e-9, np.abs(y).max())
+    return source
+
+
+def blend(tones, voice, mix: float):
+    """The distro tones with the young voice under them (`mix` = the voice's share at equal loudness)."""
+    def source(n: int, rng: np.random.Generator) -> np.ndarray:
+        a, b = tones(n, rng), voice(n, rng)
+        a = a / max(1e-9, float(np.sqrt((a ** 2).mean())))
+        b = b / max(1e-9, float(np.sqrt((b ** 2).mean())))
+        y = a * (1 - mix) + b * mix
+        return y / max(1e-9, np.abs(y).max())
+    return source
+
+
 def recipe(root: Path = CLEAN, keep: float = KEEP, vowel_mix: float = VOWEL_MIX, direct_db: float | None = DIRECT_DB,
-           scale: float = SCALE) -> arpasing.Recipe:
+           scale: float = SCALE, breath: float = BREATH, tilt: float = TILT) -> arpasing.Recipe:
     src, noise, burst, tones, raw = parts(root, keep)
-    return arpasing.Recipe("LINX_EN", f0=F0, scale=scale, source=src, noise=noise, burst=burst,
-                           onset_post=drum_tap(root), vowel_mix=vowel_mix,
+    return arpasing.Recipe("LINX_EN", f0=F0, scale=scale, source=blend(src, young_voice(breath, tilt), vowel_mix),
+                           noise=noise, burst=burst, onset_post=drum_tap(root), vowel_mix=0.0,
                            direct=raw if direct_db is not None else None,
                            direct_db=direct_db if direct_db is not None else 0.0,
                            readme=f"LINX in English: friendly open-source, a man around thirty. Desktop Linux login "
@@ -106,7 +135,7 @@ def recipe(root: Path = CLEAN, keep: float = KEEP, vowel_mix: float = VOWEL_MIX,
 
 def build_japanese(out: Path, sfx_bank: Path | None = None, name: str = "LINX", root: Path = CLEAN) -> Path:
     src, noise, burst, tones, raw = parts(root, KEEP)
-    layered = arpasing.layered(src, VOWEL_MIX)
+    layered = blend(src, young_voice(), VOWEL_MIX)
     g = 10 ** (JP_DIRECT_DB / 20)
     tap = drum_tap(root)
 

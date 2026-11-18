@@ -28,6 +28,24 @@ def test_warm_layer_removes_the_top_end():
 
 def test_linx_is_a_young_man_and_skips_android_quest_steam():
     assert linx.F0 not in (andro.MALE_F0, puresu.F0, unix.F0) and 120 < linx.F0 < 150
-    assert 0.84 < linx.SCALE < 0.9 and linx.VOWEL_MIX >= 0.5
+    assert 0.8 < linx.SCALE < unix.SCALE and linx.VOWEL_MIX >= 0.5         # chestier than UNIX
     names = " ".join(linx.TONES + linx.HISS + linx.CLICKS + [linx.DRUM]).lower()
     assert not any(k in names for k in ("android", "quest", "steam"))
+
+
+def test_young_voice_is_breathy_and_warmer_than_the_plain_glottal_source():
+    from voice2utau import synthbank
+    sr = linx.SR
+    old = synthbank.F0
+    synthbank.F0 = linx.F0
+    try:
+        plain = synthbank.glottal(sr, np.random.default_rng(0))
+        dry = linx.young_voice(breath=0.0)(sr, np.random.default_rng(0))
+        breathy = linx.young_voice()(sr, np.random.default_rng(0))
+    finally:
+        synthbank.F0 = old
+    cen = lambda y: float((np.abs(np.fft.rfft(y)) * np.fft.rfftfreq(len(y), 1 / sr)).sum() / np.abs(np.fft.rfft(y)).sum())
+    top = lambda y: np.abs(np.fft.rfft(y))[int(5000 * len(y) / sr):].mean() / np.abs(np.fft.rfft(y)).mean()
+    assert cen(dry) < cen(plain)                                       # warmer tilt
+    assert top(breathy) > 1.5 * top(dry)                               # audible breath
+    assert linx.BREATH > 0.1
