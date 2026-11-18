@@ -98,4 +98,9 @@ def andro() -> Recipe:
                   readme="ANDRO in English: his blended main voice (every Android brand pooled), male.")
 
 
-RECIPES = {"mado": mado, "ninchan": ninchan_recipe, "bako": bako, "kaso": kaso, "andro": andro}
+def rigo() -> Recipe:
+    from . import rigo as R
+    return R.recipe()
+
+
+RECIPES = {"rigo": rigo, "mado": mado, "ninchan": ninchan_recipe, "bako": bako, "kaso": kaso, "andro": andro}
