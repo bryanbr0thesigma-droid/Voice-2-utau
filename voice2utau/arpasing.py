@@ -326,13 +326,30 @@ class Recipe:
     onset_post: Callable | None = None   # (y, vowel_onset, rng) -> (y, vowel_onset): units that start a syllable
     all_post: Callable | None = None     # (y) -> y: every unit
     readme: str = ""
+    vowel_mix: float = 0.5               # share of a real glottal voice layered under a custom source (0 = source only)
+
+
+def layered(source: Callable | None, vowel_mix: float):
+    """A character source (console tone, chip pulse ...) with a real glottal voice layered under it, so the vowels
+    read as vowels while the character's sound stays. Mixed at equal loudness for vowel_mix = 0.5."""
+    if source is None or vowel_mix <= 0:
+        return source
+
+    def src(n: int, rng: np.random.Generator) -> np.ndarray:
+        a = source(n, rng)
+        g = sb.glottal(n, rng)
+        ra = float(np.sqrt((a ** 2).mean())) or 1.0
+        rg = float(np.sqrt((g ** 2).mean())) or 1.0
+        y = a / ra * (1 - vowel_mix) + g / rg * vowel_mix
+        return y / max(1e-9, np.abs(y).max())
+    return src
 
 
 @contextlib.contextmanager
 def using(r: Recipe):
     old = (sb.F0, sb.FORMANT_SCALE, sb.SOURCE_FN, sb.NOISE_FN, sb.BURST_FN, sb.POST_FN)
     sb.F0, sb.FORMANT_SCALE = r.f0, r.scale
-    sb.SOURCE_FN, sb.NOISE_FN, sb.BURST_FN, sb.POST_FN = r.source, r.noise, r.burst, None
+    sb.SOURCE_FN, sb.NOISE_FN, sb.BURST_FN, sb.POST_FN = layered(r.source, r.vowel_mix), r.noise, r.burst, None
     try:
         yield
     finally:

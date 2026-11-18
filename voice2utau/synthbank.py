@@ -116,6 +116,10 @@ def _noise(n: int, rng: np.random.Generator) -> np.ndarray:
 def _source(n: int, rng: np.random.Generator, jitter: float = 0.004, shimmer: float = 0.03) -> np.ndarray:
     if SOURCE_FN is not None:
         return SOURCE_FN(n, rng)
+    return glottal(n, rng, jitter, shimmer)
+
+
+def glottal(n: int, rng: np.random.Generator, jitter: float = 0.004, shimmer: float = 0.03) -> np.ndarray:
     """Differentiated Rosenberg pulses, one period at a time: mean pitch F0, slight jitter/shimmer, gentle tilt."""
     out = np.zeros(n)
     i = 0

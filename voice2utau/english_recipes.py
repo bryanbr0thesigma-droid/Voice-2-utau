@@ -1,5 +1,7 @@
 """The five characters as English recipes: the same voice sources, noise, clicks and finishing touches as their
-Japanese CV banks (see voice2utau.characters, voice2utau.andro), plugged into voice2utau.arpasing."""
+Japanese CV banks (see voice2utau.characters, voice2utau.andro), plugged into voice2utau.arpasing.
+Console-sound voices get a real glottal voice layered under them (Recipe.vowel_mix, 0.5 by default; nin-Chan 0.3 so the
+chip still leads), so their vowels read as vowels while the button / chime / chip sound stays."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -25,7 +27,7 @@ def ninchan_recipe() -> Recipe:
     def crunch(y: np.ndarray) -> np.ndarray:                 # 8-bit, at the bank's own level
         return np.round(np.clip(y, -1, 1) * q) / q
 
-    return Recipe("nin-Chan_EN", source=characters.chip_source(), noise=characters.lfsr_noise(),
+    return Recipe("nin-Chan_EN", source=characters.chip_source(), noise=characters.lfsr_noise(), vowel_mix=0.3,
                   burst=ninchan.make_burst([p for p in clicks if p.exists()]),
                   onset_post=lambda y, c, rng: post(y, c, None, rng), all_post=crunch,
                   readme="nin-Chan in English: pulse-wave voice, NES noise, Nintendo clicks, a menu blip on each "
