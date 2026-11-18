@@ -103,4 +103,9 @@ def rigo() -> Recipe:
     return R.recipe()
 
 
-RECIPES = {"rigo": rigo, "mado": mado, "ninchan": ninchan_recipe, "bako": bako, "kaso": kaso, "andro": andro}
+def puresu() -> Recipe:
+    from . import puresu as P
+    return P.recipe()
+
+
+RECIPES = {"puresu": puresu, "rigo": rigo, "mado": mado, "ninchan": ninchan_recipe, "bako": bako, "kaso": kaso, "andro": andro}
