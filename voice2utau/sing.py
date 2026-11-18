@@ -229,6 +229,7 @@ class Engine:
             seg = x[a:max(b, a + 1024)].astype("float64")
             f0, t = pw.dio(seg, SR, frame_period=FP, f0_floor=70, f0_ceil=800)
             f0 = pw.stonemask(seg, f0, t, SR)
+            f0 = fill_from_frq(f0, seg, Path(wav), a)
             sp = pw.cheaptrick(seg, f0, t, SR)
             ap = pw.d4c(seg, f0, t, SR)
             self.cache[key] = (f0, sp, ap, seg)
@@ -344,6 +345,51 @@ def _cap_to(y: np.ndarray, c_end: int, v0: int, v1: int, cap_db: float) -> np.nd
     y = y.copy()
     y[:c_end] *= gain
     return y
+
+
+def read_frq(path: Path) -> tuple[int, np.ndarray] | None:
+    """UTAU .frq: (hop in samples, f0 per hop) or None."""
+    import struct
+    try:
+        b = Path(path).read_bytes()
+        if b[:8] != b"FREQ0003":
+            return None
+        hop = struct.unpack_from("<i", b, 8)[0]
+        n = struct.unpack_from("<i", b, 36)[0]
+        d = np.frombuffer(b, dtype="<f8", count=2 * n, offset=40)
+        return hop, d[0::2].copy()
+    except (OSError, struct.error, ValueError):
+        return None
+
+
+def fill_from_frq(f0: np.ndarray, seg: np.ndarray, wav: Path, offset: int) -> np.ndarray:
+    """Where pitch detection found no voicing in a frame that is clearly voiced (loud, energy mostly under 2 kHz), take
+    the pitch from the sample's .frq file - what UTAU resamplers use. Breathy or console-tone voices (synthesised at a
+    known pitch) otherwise lose whole stretches of pitch tracking and come out monotone."""
+    frq = read_frq(wav.with_name(wav.stem + "_wav.frq"))
+    if frq is None:
+        return f0
+    hop, fq = frq
+    f0 = f0.copy()
+    n = 1024
+    win = np.hanning(n)
+    freqs = np.fft.rfftfreq(n, 1 / SR)
+    lo = freqs < 2000                                       # voiced sounds: most energy below 2 kHz; hiss is above
+    frame = np.arange(len(f0)) * FP / 1000 * SR
+    e = np.array([float(np.sqrt(np.mean(seg[max(0, int(c) - n // 2):int(c) + n // 2] ** 2))) if int(c) < len(seg) else 0.0
+                  for c in frame])
+    loud = e > e.max() * 10 ** (-30 / 20) if len(e) and e.max() > 0 else np.zeros(len(f0), bool)
+    for i in np.where((f0 <= 0) & loud)[0]:
+        c = int(frame[i])
+        x = seg[max(0, c - n // 2):c + n // 2]
+        if len(x) < n:
+            x = np.pad(x, (0, n - len(x)))
+        X = np.abs(np.fft.rfft(x * win)) ** 2
+        if X[lo].sum() > 0.5 * X.sum():
+            j = min(len(fq) - 1, max(0, (offset + c) // max(1, hop)))
+            if fq[j] > 0:
+                f0[i] = fq[j]
+    return f0
 
 
 def psola(x: np.ndarray, f0: np.ndarray, idx: np.ndarray, target_hz: np.ndarray, nout: int) -> np.ndarray:

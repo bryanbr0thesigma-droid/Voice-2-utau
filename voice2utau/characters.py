@@ -96,7 +96,9 @@ def pad_source(table: np.ndarray, detune_cents: float = 0.0):
 
 
 def bako_post(whoosh_noise, whoosh_ms: float = 170.0, whoosh_db: float = -16.0, hum_db: float = -20.0,
-              swell_ms: float = 150.0):
+              swell_ms: float = 150.0, swell_floor: float = 0.6):
+    """whoosh_noise=None leaves the whoosh out (in English, where syllables come close together, it buries the
+    consonants); swell_floor is where the swell into the vowel starts (1.0 = no swell)."""
     def post(y: np.ndarray, c: int, m, rng: np.random.Generator) -> tuple[np.ndarray, int]:
         y = y / max(1e-9, np.abs(y).max()) * 0.8
         n = len(y)
@@ -104,7 +106,7 @@ def bako_post(whoosh_noise, whoosh_ms: float = 170.0, whoosh_db: float = -16.0, 
         s = int(swell_ms / 1000 * SR)
         env = np.ones(n)
         u = np.clip((np.arange(n) - c) / max(1, s), 0, 1)
-        env[c:] = 0.6 + 0.4 * (3 * u[c:] ** 2 - 2 * u[c:] ** 3)
+        env[c:] = swell_floor + (1 - swell_floor) * (3 * u[c:] ** 2 - 2 * u[c:] ** 3)
         y = y * env
         # low hum an octave under the note, under the vowel only
         vow = y[c:c + int(0.2 * SR)]
@@ -113,6 +115,8 @@ def bako_post(whoosh_noise, whoosh_ms: float = 170.0, whoosh_db: float = -16.0, 
         hum = np.sin(2 * np.pi * (F0 / 2) * t) * vr * 10 ** (hum_db / 20) * np.sqrt(2)
         hum *= np.clip((np.arange(n) - c) / (0.08 * SR), 0, 1) * np.clip((n - np.arange(n)) / (0.05 * SR), 0, 1)
         y = y + hum
+        if whoosh_noise is None:
+            return y, c
         # air whoosh arriving before the syllable: rising band-passed console noise
         w = int(whoosh_ms / 1000 * SR)
         x = whoosh_noise(w, rng)

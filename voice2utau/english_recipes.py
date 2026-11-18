@@ -38,13 +38,13 @@ def bako() -> Recipe:
     F, T = VB / "bako" / "sfxstage", VB / "bako" / "stage"
     c = ninchan.pick_carriers([], top=1, keep=0.5, files=[F / "xboxstartup" / "6_series_xs_2020.wav"])
     noisy = ninchan.noisy_files([T / "og", F / "xboxdash"])
-    whoosh = ninchan.make_noise(noisy, mix=0.9) if noisy else (lambda n, r: r.standard_normal(n))
     noise = ninchan.make_noise(noisy, mix=0.7) if noisy else None
-    post = characters.bako_post(whoosh)
+    post = characters.bako_post(None, swell_floor=0.8)        # no whoosh in English: it buried his consonants
     return Recipe("BAKO_EN", source=characters.pad_source(c[0][3]), noise=noise,
                   onset_post=lambda y, c0, rng: post(y, c0, None, rng),
-                  readme="BAKO in English: pad voice from the Xbox Series startup, a swell and an air whoosh into "
-                         "each syllable, a low hum under the note.")
+                  readme="BAKO in English: pad voice from the Xbox Series startup with a real voice layered under it, "
+                         "a gentle swell into each vowel and a low hum under the note (no air whoosh: in English it "
+                         "buried his consonants).")
 
 
 def kaso() -> Recipe:

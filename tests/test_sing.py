@@ -88,3 +88,20 @@ def test_psola_engine_hits_the_pitch_and_keeps_waveform_detail(tmp_path):
     fp, gp = gap("psola")
     assert abs(1200 * np.log2(fp / 261.63)) < 10
     assert gp < gw - 10                                       # the 25 % pulse wave's missing 4th harmonic survives PSOLA
+
+
+def test_frq_fills_pitch_where_detection_fails(tmp_path):
+    from voice2utau import sing
+    from voice2utau.sfxbank import write_frq
+    sr = sing.SR
+    t = np.arange(int(0.5 * sr)) / sr
+    x = (0.3 * np.sin(2 * np.pi * 261.63 * t)).astype("float64")
+    wav = tmp_path / "a.wav"
+    write_frq(tmp_path / "a_wav.frq", len(x), hz=261.63)
+    f0 = np.zeros(int(0.5 * 1000 / sing.FP))                       # detection found nothing
+    out = sing.fill_from_frq(f0, x, wav, 0)
+    assert (out[5:-5] > 0).all() and abs(out[10] - 261.63) < 0.01
+    hiss = np.random.default_rng(0).standard_normal(len(x))
+    from scipy.signal import butter, sosfilt
+    hiss = sosfilt(butter(4, 4000, "high", fs=sr, output="sos"), hiss) * 0.3
+    assert (sing.fill_from_frq(f0, hiss, wav, 0) == 0).all()    # hiss stays unvoiced
