@@ -261,14 +261,20 @@ def render(phones: list[str], rng: np.random.Generator, ref_rms: float | None = 
             asp_hp[g.s:g.e] = 400.0
             bws[g.s:g.e] = 2.5
         elif kind == "nasal":
-            voiced[g.s:g.e] = 0.8
-            bws[g.s:g.e] = 2.5
+            voiced[g.s:g.e] = 2.2                              # the murmur passes the zero and low F1: drive it harder
+            bws[g.s:g.e] = 1.6
             zeros.append((float(ex["zero"]), ramp_mask(g.s, g.e, int(0.01 * SR))))
         elif kind == "liquid":
             voiced[g.s:g.e] = 0.85 if g.p == "l" else 1.0
             bws[g.s:g.e] = 1.6 if g.p == "l" else 0.8
         elif kind == "glide":
             voiced[g.s:g.e] = 0.85
+    for i, g in enumerate(segs):                              # a vowel or voiced sound into a final silence releases
+        if g.p == "-" and i > 0 and i == len(segs) - 1:        # over ~90 ms instead of stopping dead
+            r = min(g.e - g.s, int(0.09 * SR))
+            voiced[g.s:g.s + r] = voiced[g.s - 1] * np.linspace(1, 0, r) ** 1.5
+            for k in range(3):
+                f[k][g.s:] = f[k][g.s - 1]
     voiced = np.convolve(voiced, np.ones(int(0.006 * SR)) / int(0.006 * SR), "same")
     noise = sb._noise(n, rng)
     nz = np.zeros(n)
@@ -384,7 +390,7 @@ def build(recipe: Recipe, out: Path, rng_seed: int = 11, only: list[list[str]] |
         for u in (only or units()):
             y, segs = render(u, rng, ref)
             shift = 0
-            if recipe.onset_post and (u[0] == "-" or not is_vowel(u[0]) or is_vowel(u[1])) and is_vowel(u[-1]):
+            if recipe.onset_post and (u[0] == "-" or not is_vowel(u[0])) and is_vowel(u[-1]):
                 vo = segs[-1].s
                 w = slice(vo + int(0.06 * SR), vo + int(0.25 * SR))
                 before = float(np.sqrt((y[w] ** 2).mean()))
@@ -395,7 +401,7 @@ def build(recipe: Recipe, out: Path, rng_seed: int = 11, only: list[list[str]] |
                 y = y2 * (before / after if after > 0 else 1.0)       # touches may re-normalise: keep the bank's level
             if recipe.all_post:
                 y = recipe.all_post(y)
-            tail = int(0.03 * SR)
+            tail = int(0.008 * SR)                            # just a click guard: a longer fade dips every join
             y = y.copy()
             y[-tail:] *= np.linspace(1, 0, tail)
             peak = float(np.abs(y).max())

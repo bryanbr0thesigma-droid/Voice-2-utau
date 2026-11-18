@@ -59,27 +59,36 @@ def kaso() -> Recipe:
 
 
 def andro() -> Recipe:
-    """ANDRO's blended core: every brand's tone, hiss and clicks pooled (the same choices as his Japanese bank)."""
+    """ANDRO's blended core: every brand's tone, hiss and clicks pooled (the same choices as his Japanese bank). The
+    choices take ~10 minutes of analysis, so they are cached next to his sources."""
+    import json
     from . import andro as A
     stage = VB / "andro" / "clean"
-    brands = [b for b in A.BRANDS if (stage / b).is_dir()]
-    files = {b: sorted((stage / b).glob("*.wav")) for b in brands}
-    stock = A.stock_names(stage / "and")
-    own = {b: (files[b] if b == "and" else [p for p in files[b] if not A.is_stock(p, stock)]) or files[b] for b in brands}
-    pooled = {"clicks": [], "noisy": [], "tonal": []}
-    tones = []
+    cache = VB / "andro" / "english_recipe_cache.json"
+    if cache.exists():
+        c = json.loads(cache.read_text())
+    else:
+        brands = [b for b in A.BRANDS if (stage / b).is_dir()]
+        files = {b: sorted((stage / b).glob("*.wav")) for b in brands}
+        stock = A.stock_names(stage / "and")
+        own = {b: (files[b] if b == "and" else [p for p in files[b] if not A.is_stock(p, stock)]) or files[b] for b in brands}
+        c = {"tones": [], "noisy": [], "clicks": []}
+        with A.male():
+            for b in brands:
+                r = A.roles(own[b])
+                c["noisy"] += [str(p) for p in A.spread(r["noisy"], 12)]
+                c["clicks"] += [str(p) for p in A.spread(r["clicks"], 12)]
+                best = ninchan.pick_carriers([], top=1, keep=0.4, files=A.spread(r["tonal"], 300))
+                if best:
+                    c["tones"].append(best[0][0])
+        cache.write_text(json.dumps(c, indent=1))
     with A.male():
-        for b in brands:
-            r = A.roles(own[b])
-            for k in pooled:
-                pooled[k] += A.spread(r[k], 12)
-            best = ninchan.pick_carriers([], top=1, keep=0.4, files=A.spread(r["tonal"], 300))
-            if best:
-                tones.append(best[0][3])
-        src = ninchan.make_source(tones)
+        tables = [ninchan.pick_carriers([], top=1, keep=0.4, files=[Path(f)])[0][3] for f in c["tones"]]
+        src = ninchan.make_source(tables)
+    noisy, clicks = [Path(p) for p in c["noisy"]], [Path(p) for p in c["clicks"]]
     return Recipe("ANDRO_EN", f0=A.MALE_F0, scale=A.MALE_SCALE, source=src,
-                  noise=ninchan.make_noise(pooled["noisy"], mix=0.6) if pooled["noisy"] else None,
-                  burst=ninchan.make_burst(pooled["clicks"]) if pooled["clicks"] else None,
+                  noise=ninchan.make_noise(noisy, mix=0.6) if noisy else None,
+                  burst=ninchan.make_burst(clicks) if clicks else None,
                   readme="ANDRO in English: his blended main voice (every Android brand pooled), male.")
 
 
