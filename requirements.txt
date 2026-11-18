@@ -14,3 +14,4 @@ python-multipart
 # tests
 pytest
 httpx
+cmudict>=1.0     # Sam's English bank (voice2utau.sam): word pronunciations
