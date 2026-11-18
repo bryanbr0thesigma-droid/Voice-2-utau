@@ -15,7 +15,11 @@ VB = Path(__file__).resolve().parent.parent / "voicebanks"
 
 
 def mado() -> Recipe:
-    return Recipe("MADO_EN", readme="MADO in English: the plain synthesiser voice, as built like Adachi Rei.")
+    """A woman in her early fifties: lower speaking pitch, slightly longer tract, warmer and a little breathy."""
+    return Recipe("MADO_EN", f0=characters.MADO_F0, scale=characters.MADO_SCALE, source=characters.mature_source(),
+                  vowel_mix=0.0,
+                  readme="MADO in English: the synthesiser voice built like Adachi Rei, as a woman in her early "
+                         "fifties - lower speaking pitch, a slightly longer vocal tract, warmer, a little breathy.")
 
 
 def ninchan_recipe() -> Recipe:
@@ -31,12 +35,12 @@ def ninchan_recipe() -> Recipe:
     def crunch(y: np.ndarray) -> np.ndarray:
         return np.round(np.clip(y, -1, 1) * q) / q
 
-    return Recipe("nin-Chan_EN", source=characters.chip_source(), noise=characters.lfsr_noise(), vowel_mix=0.3,
+    return Recipe("nin-Chan_EN", source=characters.chip_source(), noise=characters.lfsr_noise(), vowel_mix=0.4,
                   direct=characters.chip_source(0.125), direct_db=-6.0,
                   burst=ninchan.make_burst([p for p in clicks if p.exists()]),
                   onset_post=lambda y, c, rng: post(y, c, None, rng), all_post=crunch,
                   readme="nin-Chan in English: a chip voice that still sings words. Pulse wave through the vocal filter "
-                         "(with a little real voice under it) for the words, a raw 12.5% pulse tone on the vowels for "
+                         "(with some real voice under it) for the words, a raw 12.5% pulse tone on the vowels for "
                          "the chiptune, NES noise, Nintendo clicks, a menu blip on each syllable, 7-bit crunch.")
 
 
