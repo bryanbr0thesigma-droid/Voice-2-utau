@@ -288,6 +288,12 @@ def render(phones: list[str], rng: np.random.Generator, ref_rms: float | None = 
         y = sb._antiresonance(y, fz, 120.0, gate)
     if ref_rms:
         y = y * (ref_rms / VOICED_RMS[0]) if VOICED_RMS[0] else y
+    if DIRECT[0] is not None:                                 # raw tone, shaped only by the voicing envelope
+        d = DIRECT[0](n, rng) * np.clip(voiced, 0, 1)
+        dr = float(np.sqrt((d[voiced > 0.9] ** 2).mean())) if (voiced > 0.9).any() else 0.0
+        if dr > 0:
+            d = d / dr * (ref_rms or 0.1) * 10 ** (DIRECT[1] / 20)
+            y = y + d
     y = y + fric
     return y, segs
 
@@ -333,6 +339,8 @@ class Recipe:
     all_post: Callable | None = None     # (y) -> y: every unit
     readme: str = ""
     vowel_mix: float = 0.5               # share of a real glottal voice layered under a custom source (0 = source only)
+    direct: Callable | None = None       # a raw source mixed in *without* the vocal-tract filter (a chip tone, etc.)
+    direct_db: float = 0.0               # its level against the filtered voice's vowels
 
 
 def layered(source: Callable | None, vowel_mix: float):
@@ -351,8 +359,12 @@ def layered(source: Callable | None, vowel_mix: float):
     return src
 
 
+DIRECT = [None, 0.0]                 # (source, dB) of the current recipe's unfiltered layer
+
+
 @contextlib.contextmanager
 def using(r: Recipe):
+    DIRECT[0], DIRECT[1] = r.direct, r.direct_db
     old = (sb.F0, sb.FORMANT_SCALE, sb.SOURCE_FN, sb.NOISE_FN, sb.BURST_FN, sb.POST_FN)
     sb.F0, sb.FORMANT_SCALE = r.f0, r.scale
     sb.SOURCE_FN, sb.NOISE_FN, sb.BURST_FN, sb.POST_FN = layered(r.source, r.vowel_mix), r.noise, r.burst, None
@@ -360,6 +372,7 @@ def using(r: Recipe):
         yield
     finally:
         sb.F0, sb.FORMANT_SCALE, sb.SOURCE_FN, sb.NOISE_FN, sb.BURST_FN, sb.POST_FN = old
+        DIRECT[0], DIRECT[1] = None, 0.0
 
 
 def oto_fields(u: list[str], segs: list[Seg], n: int, shift: int = 0) -> tuple[float, float, float, float]:
