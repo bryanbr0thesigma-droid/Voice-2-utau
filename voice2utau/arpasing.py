@@ -59,8 +59,12 @@ CONS = {
     "w": ("glide", "lab", True, 60, {"f": (320, 760, 2300)}),
     "y": ("glide", "pal", True, 55, {"f": (300, 2550, 3250)}),
 }
-VOWEL_LIST = list(VOWELS)
-CONS_LIST = list(CONS)
+# Non-rhotic accents: a post-vocalic r is not an r at all, just a short off-glide toward schwa (no F3 dip). Only an r
+# before a vowel ("red", the "r iy" of "sorry") stays an r; in Arpasing that r lives in the following "r V" unit.
+CONS["R0"] = ("liquid", "alv", True, 70, {"f": (560, 1450, 2650)})
+NON_RHOTIC = [False]
+VOWEL_LIST = [v for v in VOWELS]
+CONS_LIST = [c for c in CONS if c != "R0"]
 F4, F5 = 3900.0, 4800.0
 TR = int(0.045 * SR)                  # formant transition length at a boundary
 CLOSURE = int(0.055 * SR)
@@ -120,6 +124,15 @@ def plan(phones: list[str], sustain_ms: float = 450.0, lead_ms: float = 170.0, s
     return segs
 
 
+def derhotic(phones: list[str]) -> list[str]:
+    """Non-rhotic r: after a vowel, or an r unit running into silence ("r -"), r becomes the R0 off-glide."""
+    out = list(phones)
+    for i, p in enumerate(phones):
+        if p == "r" and ((i > 0 and is_vowel(phones[i - 1])) or (i == 0 and len(phones) > 1 and phones[1] == "-")):
+            out[i] = "R0"
+    return out
+
+
 def _neighbour_vowel(segs: list[Seg], i: int) -> str:
     for j in list(range(i + 1, len(segs))) + list(range(i - 1, -1, -1)):
         if is_vowel(segs[j].p):
@@ -130,6 +143,8 @@ def _neighbour_vowel(segs: list[Seg], i: int) -> str:
 def render(phones: list[str], rng: np.random.Generator, ref_rms: float | None = None) -> tuple[np.ndarray, list[Seg]]:
     """Synthesise one phone sequence ('-' = silence). Returns (audio, segments). With ref_rms, frication and bursts are
     set relative to that vowel loudness and the whole clip is scaled so a vowel lands at it."""
+    if NON_RHOTIC[0]:
+        phones = derhotic(phones)
     segs = plan(phones)
     n = segs[-1].e
     idx = np.arange(n)
@@ -347,6 +362,9 @@ class Recipe:
     vowel_mix: float = 0.5               # share of a real glottal voice layered under a custom source (0 = source only)
     direct: Callable | None = None       # a raw source mixed in *without* the vocal-tract filter (a chip tone, etc.)
     direct_db: float = 0.0               # its level against the filtered voice's vowels
+    vowels: dict | None = None           # accent: vowel targets that replace VOWELS entries (same format)
+    cons: dict | None = None             # accent: consonant entries that replace CONS entries
+    non_rhotic: bool = False             # accent: an r after a vowel ("car", "word") becomes a schwa-like off-glide
 
 
 def layered(source: Callable | None, vowel_mix: float):
@@ -371,6 +389,10 @@ DIRECT = [None, 0.0]                 # (source, dB) of the current recipe's unfi
 @contextlib.contextmanager
 def using(r: Recipe):
     DIRECT[0], DIRECT[1] = r.direct, r.direct_db
+    saved_v, saved_c = dict(VOWELS), dict(CONS)
+    VOWELS.update(r.vowels or {})
+    CONS.update(r.cons or {})
+    NON_RHOTIC[0] = r.non_rhotic
     old = (sb.F0, sb.FORMANT_SCALE, sb.SOURCE_FN, sb.NOISE_FN, sb.BURST_FN, sb.POST_FN)
     sb.F0, sb.FORMANT_SCALE = r.f0, r.scale
     sb.SOURCE_FN, sb.NOISE_FN, sb.BURST_FN, sb.POST_FN = layered(r.source, r.vowel_mix), r.noise, r.burst, None
@@ -379,6 +401,9 @@ def using(r: Recipe):
     finally:
         sb.F0, sb.FORMANT_SCALE, sb.SOURCE_FN, sb.NOISE_FN, sb.BURST_FN, sb.POST_FN = old
         DIRECT[0], DIRECT[1] = None, 0.0
+        VOWELS.clear(); VOWELS.update(saved_v)
+        CONS.clear(); CONS.update(saved_c)
+        NON_RHOTIC[0] = False
 
 
 def oto_fields(u: list[str], segs: list[Seg], n: int, shift: int = 0) -> tuple[float, float, float, float]:

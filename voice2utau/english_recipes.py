@@ -122,4 +122,9 @@ def linx() -> Recipe:
     return L.recipe()
 
 
-RECIPES = {"linx": linx, "unix": unix, "puresu": puresu, "rigo": rigo, "mado": mado, "ninchan": ninchan_recipe, "bako": bako, "kaso": kaso, "andro": andro}
+def joki() -> Recipe:
+    from . import joki as J
+    return J.recipe()
+
+
+RECIPES = {"joki": joki, "linx": linx, "unix": unix, "puresu": puresu, "rigo": rigo, "mado": mado, "ninchan": ninchan_recipe, "bako": bako, "kaso": kaso, "andro": andro}
