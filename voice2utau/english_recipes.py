@@ -112,4 +112,9 @@ def puresu() -> Recipe:
     return P.recipe()
 
 
-RECIPES = {"puresu": puresu, "rigo": rigo, "mado": mado, "ninchan": ninchan_recipe, "bako": bako, "kaso": kaso, "andro": andro}
+def unix() -> Recipe:
+    from . import unix as X
+    return X.recipe()
+
+
+RECIPES = {"unix": unix, "puresu": puresu, "rigo": rigo, "mado": mado, "ninchan": ninchan_recipe, "bako": bako, "kaso": kaso, "andro": andro}
