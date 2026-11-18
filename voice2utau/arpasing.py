@@ -288,8 +288,14 @@ def render(phones: list[str], rng: np.random.Generator, ref_rms: float | None = 
         y = sb._antiresonance(y, fz, 120.0, gate)
     if ref_rms:
         y = y * (ref_rms / VOICED_RMS[0]) if VOICED_RMS[0] else y
-    if DIRECT[0] is not None:                                 # raw tone, shaped only by the voicing envelope
-        d = DIRECT[0](n, rng) * np.clip(voiced, 0, 1)
+    if DIRECT[0] is not None:                                 # raw tone on the vowels only: on voiced consonants
+        vm = np.zeros(n)                                      # (m, n, z, b ...) it buries the very cues that make words
+        for g in segs:
+            if is_vowel(g.p):
+                vm[g.s:g.e] = 1.0
+        r = int(0.015 * SR)
+        vm = np.convolve(vm, np.ones(r) / r, "same")
+        d = DIRECT[0](n, rng) * vm * np.clip(voiced, 0, 1)
         dr = float(np.sqrt((d[voiced > 0.9] ** 2).mean())) if (voiced > 0.9).any() else 0.0
         if dr > 0:
             d = d / dr * (ref_rms or 0.1) * 10 ** (DIRECT[1] / 20)

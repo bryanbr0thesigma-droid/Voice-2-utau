@@ -19,24 +19,25 @@ def mado() -> Recipe:
 
 
 def ninchan_recipe() -> Recipe:
-    """A chip voice: the formant-filtered pulse gives the vowel, a raw pulse tone on top (no vocal filter) gives the
-    chiptune, and the result is sample-and-hold downsampled (console-era aliasing) and crushed to 6 bits."""
+    """A chip voice that still sings words: the formant-filtered pulse (with a little real voice under it) carries the
+    vowels and consonants, a raw 12.5% pulse tone sits on the vowels only (no vocal filter, ~6 dB under the voice) for
+    the chiptune, and a light 7-bit crunch. The full-chip version (raw tone on everything, sample-and-hold) scored 37%
+    of word sounds recognised against MADO's 63%; this one keeps the character and most of the words."""
     N = VB / "ninchan" / "stage"
     clicks = [N / "wii" / "Click.wav", N / "wii" / "Button press.wav", N / "switch" / "Klick.wav", N / "switch" / "Tick.wav"]
     post = characters.ninchan_post()
-    hold, q = 4, 2 ** 5                                       # ~11 kHz sample-and-hold, 6-bit
+    q = 2 ** 6                                                # 7-bit
 
     def crunch(y: np.ndarray) -> np.ndarray:
-        z = np.repeat(y[::hold], hold)[:len(y)]
-        return np.round(np.clip(z, -1, 1) * q) / q
+        return np.round(np.clip(y, -1, 1) * q) / q
 
-    return Recipe("nin-Chan_EN", source=characters.chip_source(), noise=characters.lfsr_noise(), vowel_mix=0.0,
-                  direct=characters.chip_source(0.125), direct_db=-1.0,
+    return Recipe("nin-Chan_EN", source=characters.chip_source(), noise=characters.lfsr_noise(), vowel_mix=0.3,
+                  direct=characters.chip_source(0.125), direct_db=-6.0,
                   burst=ninchan.make_burst([p for p in clicks if p.exists()]),
                   onset_post=lambda y, c, rng: post(y, c, None, rng), all_post=crunch,
-                  readme="nin-Chan in English: a chip voice. Pulse wave through the vocal filter for the vowels, a "
-                         "raw 12.5% pulse tone on top for the chiptune, NES noise, Nintendo clicks, a menu blip on each "
-                         "syllable, console-era sample-and-hold and 6-bit crunch.")
+                  readme="nin-Chan in English: a chip voice that still sings words. Pulse wave through the vocal filter "
+                         "(with a little real voice under it) for the words, a raw 12.5% pulse tone on the vowels for "
+                         "the chiptune, NES noise, Nintendo clicks, a menu blip on each syllable, 7-bit crunch.")
 
 
 def bako() -> Recipe:
