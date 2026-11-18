@@ -117,4 +117,9 @@ def unix() -> Recipe:
     return X.recipe()
 
 
-RECIPES = {"unix": unix, "puresu": puresu, "rigo": rigo, "mado": mado, "ninchan": ninchan_recipe, "bako": bako, "kaso": kaso, "andro": andro}
+def linx() -> Recipe:
+    from . import linx as L
+    return L.recipe()
+
+
+RECIPES = {"linx": linx, "unix": unix, "puresu": puresu, "rigo": rigo, "mado": mado, "ninchan": ninchan_recipe, "bako": bako, "kaso": kaso, "andro": andro}
